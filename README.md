@@ -8,7 +8,7 @@ Buzz 拆散的短片段，再按照完整语义和自然标点断句，最后调
 
 ## 立即使用
 
-**[打开在线工具](https://bilingual-subtitle-studio.realzane.chatgpt.site)**
+**[打开在线工具](https://bilingual-subtitle-studio.guanzun9-tools.workers.dev)**
 
 无需安装、无需注册、无需 ChatGPT 登录。准备两样东西即可：
 
