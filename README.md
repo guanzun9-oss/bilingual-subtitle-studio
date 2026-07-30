@@ -1,6 +1,6 @@
-# 双语字幕工坊
+# 双语字幕工坊 · Bilingual Subtitle Studio
 
-![双语字幕工坊](./public/og-v2.png)
+![双语字幕工坊 · Bilingual Subtitle Studio](./public/og-v2.png)
 
 一个面向 Buzz 英文识别字幕的中英双语 SRT 整理工具。它会先重新合并被
 Buzz 拆散的短片段，再按照完整语义和自然标点断句，最后调用 DeepSeek API
