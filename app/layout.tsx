@@ -16,7 +16,7 @@ export async function generateMetadata(): Promise<Metadata> {
   return {
     title: "双语字幕工坊｜英文 SRT 转中英双语字幕",
     description:
-      "先合并 Buzz 拆散的短片段，再用 DeepSeek 生成自然对齐的中英双语字幕。",
+      "无需安装或登录，上传英文 SRT，用 DeepSeek 生成自然对齐的中英双语字幕。",
     openGraph: {
       title: "双语字幕工坊",
       description: "语义合并、自动重试，让中英文自然对齐。",

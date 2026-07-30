@@ -6,11 +6,17 @@
 Buzz 拆散的短片段，再按照完整语义和自然标点断句，最后调用 DeepSeek API
 生成逐条对齐的中文字幕。
 
-[在线体验](https://bilingual-subtitle-studio.realzane.chatgpt.site) ·
-[反馈问题](https://github.com/guanzun9-oss/bilingual-subtitle-studio/issues)
+## 立即使用
 
-> 在线版本为私有站点，打开时需要通过 ChatGPT 安全登录。字幕文件和
-> DeepSeek API Key 不会被保存。
+**[打开在线工具](https://bilingual-subtitle-studio.realzane.chatgpt.site)**
+
+无需安装、无需注册、无需 ChatGPT 登录。准备两样东西即可：
+
+1. Buzz 导出的英文 `.srt` 文件
+2. 自己的 [DeepSeek API Key](https://platform.deepseek.com/api_keys)
+
+上传字幕、点击翻译、下载双语 SRT，整个过程都在一个页面完成。字幕文件和
+API Key 不会被本站保存。
 
 ## 为什么做这个工具
 
@@ -46,7 +52,16 @@ Buzz 导出的英文 SRT 经常按照识别时间切成很短的片段。直接�
 4. 开始翻译；如遇网络中断，可继续处理尚未完成的条目。
 5. 在预览区校对译文，下载中英双语 SRT。
 
-## 本地运行
+## 隐私说明
+
+- API Key 只随当次翻译请求发送，不写入本地文件或浏览器存储
+- 字幕文件只在当前页面中处理，不保存到项目服务器
+- 翻译内容会按照 DeepSeek API 的处理流程发送给 DeepSeek
+
+<details>
+<summary>开发者信息（普通用户无需阅读）</summary>
+
+### 本地运行
 
 需要 Node.js `>=22.13.0`。
 
@@ -59,29 +74,17 @@ npm run dev
 
 浏览器打开 `http://localhost:3000`。
 
-## 测试与构建
+### 测试与构建
 
 ```bash
 npm test
 npm run build
 ```
 
-测试覆盖 SRT 解析、Buzz 短片段合并、自然断句、时间范围保持、双语导出和页面
-服务端渲染。
+技术栈：React 19、Next.js 16 / vinext、TypeScript、Cloudflare Workers 和
+DeepSeek Chat Completions API。
 
-## 技术栈
-
-- React 19
-- Next.js 16 / vinext
-- TypeScript
-- Cloudflare Workers
-- DeepSeek Chat Completions API
-
-## 隐私说明
-
-- API Key 只随当次翻译请求发送，不写入本地文件或浏览器存储
-- 字幕文件只在当前页面中处理，不保存到项目服务器
-- 翻译内容会按照 DeepSeek API 的处理流程发送给 DeepSeek
+</details>
 
 ## 参与改进
 

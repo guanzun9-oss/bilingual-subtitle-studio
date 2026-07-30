@@ -607,6 +607,24 @@ fieldset {
   font-size: 12px;
 }
 
+.key-help {
+  margin: 8px 0 0;
+  color: var(--subtle);
+  font-size: 9px;
+  line-height: 1.55;
+}
+
+.key-help a {
+  margin-left: 5px;
+  color: var(--blue);
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.key-help a:hover {
+  text-decoration: underline;
+}
+
 .two-columns {
   display: grid;
   grid-template-columns: 1fr 1fr;

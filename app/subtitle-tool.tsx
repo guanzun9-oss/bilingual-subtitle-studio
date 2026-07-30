@@ -311,23 +311,23 @@ export default function SubtitleTool() {
         </a>
         <div className="header-note">
           <span className="privacy-dot" />
-          API Key 仅用于当次翻译
+          无需安装 · 无需 ChatGPT 登录
         </div>
       </header>
 
       <section className="hero" id="top">
         <div className="eyebrow">
-          <span>BUZZ 字幕整理助手</span>
+          <span>打开即用</span>
           <i />
-          英译中
+          英文 SRT → 中英双语
         </div>
         <h1>
           英文 SRT，一步变成
           <em>自然对齐的双语字幕</em>
         </h1>
         <p>
-          先把 Buzz 拆散的短片段重新合成完整句子，再按自然标点整理并用
-          DeepSeek 翻译。更连贯，也更容易校对。
+          无需安装软件。上传 Buzz 导出的英文 SRT，工具会自动整理断句，
+          再用你的 DeepSeek API Key 翻译并导出双语字幕。
         </p>
       </section>
 
@@ -543,6 +543,16 @@ export default function SubtitleTool() {
                 onChange={(event) => setApiKey(event.target.value)}
               />
             </div>
+            <p className="key-help">
+              这是唯一需要准备的内容，Key 只用于当次翻译。
+              <a
+                href="https://platform.deepseek.com/api_keys"
+                target="_blank"
+                rel="noreferrer"
+              >
+                获取 DeepSeek API Key
+              </a>
+            </p>
 
             <div className="two-columns">
               <label>
