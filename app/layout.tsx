@@ -11,22 +11,22 @@ export async function generateMetadata(): Promise<Metadata> {
   const protocol =
     headerList.get("x-forwarded-proto") ||
     (host.startsWith("localhost") ? "http" : "https");
-  const imageUrl = `${protocol}://${host}/og.png`;
+  const imageUrl = `${protocol}://${host}/og-v2.png`;
 
   return {
     title: "双语字幕工坊｜英文 SRT 转中英双语字幕",
     description:
-      "整理 Buzz 英文 SRT 的过长字幕，并使用 DeepSeek 翻译为对齐的中英双语字幕。",
+      "先合并 Buzz 拆散的短片段，再用 DeepSeek 生成自然对齐的中英双语字幕。",
     openGraph: {
       title: "双语字幕工坊",
-      description: "让每一句字幕，刚刚好。",
+      description: "语义合并、自动重试，让中英文自然对齐。",
       type: "website",
       images: [{ url: imageUrl, width: 1792, height: 909 }],
     },
     twitter: {
       card: "summary_large_image",
       title: "双语字幕工坊",
-      description: "让每一句字幕，刚刚好。",
+      description: "语义合并、自动重试，让中英文自然对齐。",
       images: [imageUrl],
     },
   };

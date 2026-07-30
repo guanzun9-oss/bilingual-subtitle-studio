@@ -12,9 +12,11 @@ import {
 type Cue = {
   id: string;
   sourceId: string;
+  sourceIds?: string[];
   startMs: number;
   endMs: number;
   text: string;
+  contextText?: string;
 };
 
 type Mode = "new-cue" | "line-break";
@@ -52,7 +54,7 @@ export default function SubtitleTool() {
   const abortRef = useRef<AbortController | null>(null);
   const [sourceName, setSourceName] = useState("");
   const [sourceCues, setSourceCues] = useState<Cue[]>([]);
-  const [maxChars, setMaxChars] = useState(48);
+  const [maxChars, setMaxChars] = useState(112);
   const [mode, setMode] = useState<Mode>("new-cue");
   const [order, setOrder] = useState<Order>("chinese-first");
   const [model, setModel] = useState("deepseek-v4-flash");
@@ -112,6 +114,75 @@ export default function SubtitleTool() {
     await loadText(await file.text(), file.name);
   }
 
+  async function requestTranslationGroup(
+    initialGroup: Cue[],
+    controller: AbortController,
+  ) {
+    let remaining = initialGroup;
+    const completed: Record<string, string> = {};
+    let lastMessage = "翻译失败，请稍后重试。";
+
+    for (let attempt = 0; attempt < 3 && remaining.length; attempt += 1) {
+      try {
+        const response = await fetch("/api/translate", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          signal: controller.signal,
+          body: JSON.stringify({
+            apiKey: apiKey.trim(),
+            model,
+            items: remaining.map((cue) => ({
+              id: cue.id,
+              text: cue.text.replace(/\n/g, " "),
+              context: (cue.contextText || cue.text).replace(/\n/g, " "),
+            })),
+          }),
+        });
+
+        let data: {
+          error?: string;
+          translations?: Record<string, string>;
+        } = {};
+        try {
+          data = (await response.json()) as typeof data;
+        } catch {
+          lastMessage = "服务器返回异常，正在自动重试。";
+        }
+
+        if (data.translations) Object.assign(completed, data.translations);
+        remaining = remaining.filter((cue) => !completed[cue.id]);
+        if (!remaining.length) return completed;
+
+        lastMessage = data.error || lastMessage;
+        if (response.status === 401 || response.status === 403) {
+          throw new Error(lastMessage);
+        }
+      } catch (error) {
+        if (controller.signal.aborted) throw error;
+        if (
+          error instanceof Error &&
+          /API Key|访问权限/.test(error.message)
+        ) {
+          throw error;
+        }
+        lastMessage =
+          error instanceof Error && error.message
+            ? error.message
+            : "网络连接中断，正在自动重试。";
+      }
+
+      if (attempt < 2) {
+        await new Promise((resolve) => setTimeout(resolve, 900 * 2 ** attempt));
+      }
+    }
+
+    const error = new Error(lastMessage) as Error & {
+      partial?: Record<string, string>;
+    };
+    error.partial = completed;
+    throw error;
+  }
+
   async function translate() {
     if (!sourceCues.length) {
       setStatus("error");
@@ -128,39 +199,54 @@ export default function SubtitleTool() {
     abortRef.current = controller;
     setStatus("translating");
     setMessage("");
-    setProgress(0);
-    setTranslations({});
+    const validIds = new Set(tidy.map((cue) => cue.id));
+    const nextTranslations = Object.fromEntries(
+      Object.entries(translations).filter(
+        ([id, text]) => validIds.has(id) && text.trim(),
+      ),
+    );
+    const pending = tidy.filter((cue) => !nextTranslations[cue.id]);
+    setProgress(
+      tidy.length
+        ? Math.round(
+            ((tidy.length - pending.length) / Math.max(1, tidy.length)) * 100,
+          )
+        : 0,
+    );
 
     try {
-      const groups = batch(tidy, 40);
-      const nextTranslations: Record<string, string> = {};
+      if (!pending.length) {
+        setStatus("done");
+        setProgress(100);
+        setMessage("全部字幕已经翻译完成。");
+        return;
+      }
+
+      const groups = batch(pending, 18);
 
       for (let index = 0; index < groups.length; index += 1) {
-        const response = await fetch("/api/translate", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          signal: controller.signal,
-          body: JSON.stringify({
-            apiKey: apiKey.trim(),
-            model,
-            items: groups[index].map((cue) => ({
-              id: cue.id,
-              text: cue.text.replace(/\n/g, " "),
-            })),
-          }),
-        });
-
-        const data = (await response.json()) as {
-          error?: string;
-          translations?: Record<string, string>;
-        };
-        if (!response.ok || !data.translations) {
-          throw new Error(data.error || "翻译失败，请稍后重试。");
+        try {
+          Object.assign(
+            nextTranslations,
+            await requestTranslationGroup(groups[index], controller),
+          );
+        } catch (error) {
+          const partial = (error as Error & {
+            partial?: Record<string, string>;
+          }).partial;
+          if (partial) Object.assign(nextTranslations, partial);
+          setTranslations({ ...nextTranslations });
+          throw error;
         }
-
-        Object.assign(nextTranslations, data.translations);
         setTranslations({ ...nextTranslations });
-        setProgress(Math.round(((index + 1) / groups.length) * 100));
+        setProgress(
+          Math.round(
+            (Object.keys(nextTranslations).filter((id) => validIds.has(id))
+              .length /
+              tidy.length) *
+              100,
+          ),
+        );
       }
 
       setStatus("done");
@@ -171,7 +257,13 @@ export default function SubtitleTool() {
         setMessage("已停止翻译。");
       } else {
         setStatus("error");
-        setMessage(error instanceof Error ? error.message : "翻译失败。");
+        const finished = Object.keys(nextTranslations).filter((id) =>
+          validIds.has(id),
+        ).length;
+        const detail = error instanceof Error ? error.message : "翻译失败。";
+        setMessage(
+          `${detail} 已保留完成的 ${finished} 条，点击按钮可从这里继续。`,
+        );
       }
     } finally {
       abortRef.current = null;
@@ -230,12 +322,12 @@ export default function SubtitleTool() {
           英译中
         </div>
         <h1>
-          让每一句字幕，
-          <em>刚刚好。</em>
+          英文 SRT，一步变成
+          <em>自然对齐的双语字幕</em>
         </h1>
         <p>
-          导入英文 SRT，自动在句号、逗号或自然语义处拆分，
-          再用 DeepSeek 生成对齐的中英双语字幕。
+          先把 Buzz 拆散的短片段重新合成完整句子，再按自然标点整理并用
+          DeepSeek 翻译。更连贯，也更容易校对。
         </p>
       </section>
 
@@ -342,22 +434,22 @@ export default function SubtitleTool() {
             <span className="panel-number coral">02</span>
             <div>
               <h2>整理断句</h2>
-              <p>设置每条字幕的理想长度与呈现方式。</p>
+              <p>先合并同一句，再设置理想长度与呈现方式。</p>
             </div>
           </div>
 
           <fieldset disabled={!sourceCues.length || status === "translating"}>
             <label className="control-label" htmlFor="max-chars">
-              每条英文最多字符
+              每条英文建议长度
               <output htmlFor="max-chars">{maxChars}</output>
             </label>
             <input
               id="max-chars"
               className="range"
               type="range"
-              min="28"
-              max="80"
-              step="2"
+              min="56"
+              max="160"
+              step="8"
               value={maxChars}
               onChange={(event) => {
                 setMaxChars(Number(event.target.value));
@@ -365,8 +457,8 @@ export default function SubtitleTool() {
               }}
             />
             <div className="range-labels">
-              <span>更短，更易读</span>
-              <span>更长，条目更少</span>
+              <span>短一些</span>
+              <span>长一些，语义更完整</span>
             </div>
 
             <div className="control-group">
@@ -384,7 +476,7 @@ export default function SubtitleTool() {
                 />
                 <span>
                   <b>拆成下一条字幕</b>
-                  <small>按文字比例自动分配原时间段</small>
+                  <small>先合并完整句，再按标点与长度分配时间</small>
                 </span>
                 <i>推荐</i>
               </label>
@@ -420,7 +512,7 @@ export default function SubtitleTool() {
                 <strong>{tidy.length || "—"}</strong>
                 <small>条</small>
               </div>
-              <div className="natural-tag">优先自然标点</div>
+              <div className="natural-tag">先合并完整句</div>
             </div>
           </fieldset>
         </div>
@@ -430,7 +522,7 @@ export default function SubtitleTool() {
             <span className="panel-number ink">03</span>
             <div>
               <h2>DeepSeek 翻译</h2>
-              <p>分批翻译，保持每条中英文严格对应。</p>
+              <p>自动重试并保留进度，确保每条中英文对应。</p>
             </div>
           </div>
 
@@ -497,7 +589,11 @@ export default function SubtitleTool() {
               disabled={!sourceCues.length}
               onClick={() => void translate()}
             >
-              <span>开始制作双语字幕</span>
+              <span>
+                {translatedCount > 0 && translatedCount < tidy.length
+                  ? `继续翻译剩余 ${tidy.length - translatedCount} 条`
+                  : "开始制作双语字幕"}
+              </span>
               <b>→</b>
             </button>
           )}

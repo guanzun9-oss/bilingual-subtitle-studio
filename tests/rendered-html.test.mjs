@@ -30,7 +30,7 @@ test("server renders the subtitle studio", async () => {
   const html = await response.text();
   assert.match(html, /<html lang="zh-CN">/i);
   assert.match(html, /双语字幕工坊/);
-  assert.match(html, /让每一句字幕/);
+  assert.match(html, /自然对齐的双语字幕/);
   assert.match(html, /DeepSeek/);
   assert.doesNotMatch(html, /codex-preview|react-loading-skeleton/i);
 });

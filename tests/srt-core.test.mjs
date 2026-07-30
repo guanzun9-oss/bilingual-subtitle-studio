@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  mergeFragmentedCues,
   parseSrt,
   serializeSrt,
   splitAtNaturalBreaks,
@@ -30,6 +31,41 @@ test("prefers punctuation when splitting long lines", () => {
   );
   assert.equal(parts[0], "This is the opening clause,");
   assert.equal(parts.join(" "), "This is the opening clause, and this is a much longer closing clause.");
+});
+
+test("rejoins Buzz fragments before creating readable semantic cues", () => {
+  const fragmented = parseSrt(`1
+00:00:00,000 --> 00:00:03,687
+You cannot control what a great military event
+
+2
+00:00:03,687 --> 00:00:07,280
+can set loose. More battle casualties than US
+
+3
+00:00:07,280 --> 00:00:10,005
+forces had suffered in every war combined down
+
+4
+00:00:10,005 --> 00:00:12,031
+to that point happened in two days.`);
+
+  const merged = mergeFragmentedCues(fragmented);
+  assert.equal(merged.length, 1);
+  assert.equal(merged[0].startMs, 0);
+  assert.equal(merged[0].endMs, 12031);
+
+  const tidy = tidyCues(fragmented, { maxChars: 112, mode: "new-cue" });
+  assert.equal(tidy.length, 2);
+  assert.equal(
+    tidy[0].text,
+    "You cannot control what a great military event can set loose.",
+  );
+  assert.equal(
+    tidy[1].text,
+    "More battle casualties than US forces had suffered in every war combined down to that point happened in two days.",
+  );
+  assert.equal(tidy[0].contextText, merged[0].text);
 });
 
 test("new cues preserve the original time range", () => {
