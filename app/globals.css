@@ -681,15 +681,30 @@ select:hover {
 .progress-box {
   margin-top: 22px;
   padding: 14px;
+  border: 1px solid #d7e3f4;
   border-radius: 10px;
   background: #f8fafd;
 }
 
-.progress-box > div:first-child {
+.progress-box.error {
+  border-color: #f3c7c3;
+  background: #fef7f6;
+}
+
+.progress-box.done {
+  border-color: #b7dfc2;
+  background: #f5fbf6;
+}
+
+.progress-heading {
   display: flex;
   justify-content: space-between;
   color: var(--muted);
   font-size: 11px;
+}
+
+.progress-heading strong {
+  color: var(--text);
 }
 
 .progress-track {
@@ -706,6 +721,58 @@ select:hover {
   border-radius: inherit;
   background: var(--blue);
   transition: width 200ms ease;
+}
+
+.progress-box.error .progress-track i {
+  background: var(--red);
+}
+
+.progress-box.done .progress-track i {
+  background: var(--green);
+}
+
+.progress-box p {
+  margin: 9px 0 0;
+  color: var(--subtle);
+  font-size: 9px;
+}
+
+.progress-box p strong {
+  color: var(--text);
+}
+
+.task-actions {
+  display: flex;
+  align-items: stretch;
+  gap: 9px;
+  margin-top: 14px;
+}
+
+.task-actions .primary-button {
+  flex: 1;
+  margin-top: 0;
+}
+
+.task-actions > .text-button {
+  width: 100%;
+  min-height: 42px;
+  border: 1px solid var(--border);
+}
+
+.restart-button {
+  min-height: 48px;
+  padding: 0 15px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--red);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.restart-button:hover {
+  border-color: #e7aca7;
+  background: #fef7f6;
 }
 
 .status-message {
@@ -748,6 +815,12 @@ select:hover {
   color: var(--text);
   font-size: 24px;
   font-weight: 600;
+}
+
+.preview-summary {
+  margin: 7px 0 0;
+  color: var(--muted);
+  font-size: 10px;
 }
 
 .preview-actions .download-button {
@@ -845,13 +918,6 @@ select:hover {
 
 .subtitle-copy.english-first p {
   margin-top: 0;
-}
-
-.preview-more {
-  margin: 20px 0 0;
-  color: var(--muted);
-  font-size: 10px;
-  text-align: center;
 }
 
 footer {
@@ -969,6 +1035,14 @@ footer p {
   }
 
   .preview-actions .download-button {
+    width: 100%;
+  }
+
+  .task-actions {
+    flex-direction: column;
+  }
+
+  .restart-button {
     width: 100%;
   }
 

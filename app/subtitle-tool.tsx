@@ -63,7 +63,6 @@ export default function SubtitleTool() {
   const [status, setStatus] = useState<
     "idle" | "ready" | "translating" | "done" | "error"
   >("idle");
-  const [progress, setProgress] = useState(0);
   const [message, setMessage] = useState("");
   const [dragging, setDragging] = useState(false);
 
@@ -73,13 +72,27 @@ export default function SubtitleTool() {
   );
 
   const translatedCount = useMemo(
-    () => tidy.filter((cue) => translations[cue.id]).length,
+    () => tidy.filter((cue) => translations[cue.id]?.trim()).length,
     [tidy, translations],
   );
 
+  const progress = tidy.length
+    ? Math.round((translatedCount / tidy.length) * 100)
+    : 0;
+
+  const progressLabel =
+    status === "done"
+      ? "制作完成"
+      : status === "translating"
+        ? "正在翻译与校准…"
+        : status === "error"
+          ? "任务中断，当前进度已保留"
+          : translatedCount
+            ? "任务已暂停，可以继续"
+            : "制作进度";
+
   function resetOutput() {
     setTranslations({});
-    setProgress(0);
     setMessage("");
     setStatus(sourceCues.length ? "ready" : "idle");
   }
@@ -90,7 +103,6 @@ export default function SubtitleTool() {
       setSourceName(name);
       setSourceCues(cues);
       setTranslations({});
-      setProgress(0);
       setStatus("ready");
       setMessage("");
     } catch (error) {
@@ -183,7 +195,7 @@ export default function SubtitleTool() {
     throw error;
   }
 
-  async function translate() {
+  async function translate(restart = false) {
     if (!sourceCues.length) {
       setStatus("error");
       setMessage("请先导入英文 SRT 文件。");
@@ -200,24 +212,19 @@ export default function SubtitleTool() {
     setStatus("translating");
     setMessage("");
     const validIds = new Set(tidy.map((cue) => cue.id));
-    const nextTranslations = Object.fromEntries(
-      Object.entries(translations).filter(
-        ([id, text]) => validIds.has(id) && text.trim(),
-      ),
-    );
+    const nextTranslations: Record<string, string> = restart
+      ? {}
+      : Object.fromEntries(
+          Object.entries(translations).filter(
+            ([id, text]) => validIds.has(id) && text.trim(),
+          ),
+        );
+    if (restart) setTranslations({});
     const pending = tidy.filter((cue) => !nextTranslations[cue.id]);
-    setProgress(
-      tidy.length
-        ? Math.round(
-            ((tidy.length - pending.length) / Math.max(1, tidy.length)) * 100,
-          )
-        : 0,
-    );
 
     try {
       if (!pending.length) {
         setStatus("done");
-        setProgress(100);
         setMessage("全部字幕已经翻译完成。");
         return;
       }
@@ -239,14 +246,6 @@ export default function SubtitleTool() {
           throw error;
         }
         setTranslations({ ...nextTranslations });
-        setProgress(
-          Math.round(
-            (Object.keys(nextTranslations).filter((id) => validIds.has(id))
-              .length /
-              tidy.length) *
-              100,
-          ),
-        );
       }
 
       setStatus("done");
@@ -575,37 +574,65 @@ export default function SubtitleTool() {
             </div>
           </fieldset>
 
-          {status === "translating" ? (
-            <div className="progress-box" aria-live="polite">
-              <div>
-                <span>正在翻译与校准…</span>
+          {sourceCues.length > 0 && (
+            <div className={`progress-box ${status}`} aria-live="polite">
+              <div className="progress-heading">
+                <span>{progressLabel}</span>
                 <strong>{progress}%</strong>
               </div>
-              <div className="progress-track">
+              <div
+                className="progress-track"
+                role="progressbar"
+                aria-label="双语字幕制作进度"
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-valuenow={progress}
+              >
                 <i style={{ width: `${progress}%` }} />
               </div>
+              <p>
+                已完成 <strong>{translatedCount}</strong> / {tidy.length} 条
+              </p>
+            </div>
+          )}
+
+          {status === "translating" ? (
+            <div className="task-actions">
               <button
                 className="text-button"
                 type="button"
                 onClick={() => abortRef.current?.abort()}
               >
-                停止
+                暂停任务
               </button>
             </div>
           ) : (
-            <button
-              className="primary-button"
-              type="button"
-              disabled={!sourceCues.length}
-              onClick={() => void translate()}
-            >
-              <span>
-                {translatedCount > 0 && translatedCount < tidy.length
-                  ? `继续翻译剩余 ${tidy.length - translatedCount} 条`
-                  : "开始制作双语字幕"}
-              </span>
-              <b>→</b>
-            </button>
+            <div className="task-actions">
+              <button
+                className="primary-button"
+                type="button"
+                disabled={!sourceCues.length}
+                onClick={() => void translate()}
+              >
+                <span>
+                  {translatedCount > 0 && translatedCount < tidy.length
+                    ? `继续任务 · 剩余 ${tidy.length - translatedCount} 条`
+                    : status === "error"
+                      ? "继续任务"
+                      : "开始制作双语字幕"}
+                </span>
+                <b>→</b>
+              </button>
+              {status === "error" && sourceCues.length > 0 && (
+                <button
+                  className="restart-button"
+                  type="button"
+                  onClick={() => void translate(true)}
+                >
+                  重新开始
+                </button>
+              )}
+            </div>
           )}
 
           {message && (
@@ -625,6 +652,7 @@ export default function SubtitleTool() {
             <div>
               <span className="section-kicker">实时预览</span>
               <h2>字幕会这样呈现</h2>
+              <p className="preview-summary">全部显示 · 共 {tidy.length} 条</p>
             </div>
             <div className="preview-actions">
               <button
@@ -647,7 +675,7 @@ export default function SubtitleTool() {
           </div>
 
           <div className="subtitle-list">
-            {tidy.slice(0, 12).map((cue, index) => (
+            {tidy.map((cue, index) => (
               <article className="subtitle-row" key={cue.id}>
                 <div className="cue-number">{String(index + 1).padStart(2, "0")}</div>
                 <time>
@@ -687,11 +715,6 @@ export default function SubtitleTool() {
               </article>
             ))}
           </div>
-          {tidy.length > 12 && (
-            <p className="preview-more">
-              预览前 12 条，下载文件将包含全部 {tidy.length} 条字幕。
-            </p>
-          )}
         </section>
       )}
 
