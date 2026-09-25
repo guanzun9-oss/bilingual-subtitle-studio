@@ -3,6 +3,7 @@
 import { useMemo, useRef, useState } from "react";
 import {
   formatTimestamp,
+  isReadableChineseSubtitle,
   parseSrt,
   serializeSrt,
   subtitleDuration,
@@ -49,12 +50,19 @@ function sanitizeFileName(name: string) {
   return name.replace(/\.srt$/i, "").replace(/[\\/:*?"<>|]/g, "-");
 }
 
+function maxChineseChars(cue: Cue) {
+  return Math.max(
+    8,
+    Math.min(32, Math.floor(((cue.endMs - cue.startMs) / 1000) * 9)),
+  );
+}
+
 export default function SubtitleTool() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const abortRef = useRef<AbortController | null>(null);
   const [sourceName, setSourceName] = useState("");
   const [sourceCues, setSourceCues] = useState<Cue[]>([]);
-  const [maxChars, setMaxChars] = useState(112);
+  const [maxChars, setMaxChars] = useState(72);
   const [mode, setMode] = useState<Mode>("new-cue");
   const [order, setOrder] = useState<Order>("chinese-first");
   const [model, setModel] = useState("deepseek-v4-flash");
@@ -72,7 +80,28 @@ export default function SubtitleTool() {
   );
 
   const translatedCount = useMemo(
-    () => tidy.filter((cue) => translations[cue.id]?.trim()).length,
+    () =>
+      tidy.filter(
+        (cue) =>
+          translations[cue.id]?.trim() &&
+          isReadableChineseSubtitle(
+            translations[cue.id],
+            maxChineseChars(cue),
+          ),
+      ).length,
+    [tidy, translations],
+  );
+
+  const overlongCount = useMemo(
+    () =>
+      tidy.filter(
+        (cue) =>
+          translations[cue.id]?.trim() &&
+          !isReadableChineseSubtitle(
+            translations[cue.id],
+            maxChineseChars(cue),
+          ),
+      ).length,
     [tidy, translations],
   );
 
@@ -147,6 +176,7 @@ export default function SubtitleTool() {
               id: cue.id,
               text: cue.text.replace(/\n/g, " "),
               context: (cue.contextText || cue.text).replace(/\n/g, " "),
+              maxChineseChars: maxChineseChars(cue),
             })),
           }),
         });
@@ -212,15 +242,30 @@ export default function SubtitleTool() {
     setStatus("translating");
     setMessage("");
     const validIds = new Set(tidy.map((cue) => cue.id));
+    const cuesById = new Map(tidy.map((cue) => [cue.id, cue]));
     const nextTranslations: Record<string, string> = restart
       ? {}
       : Object.fromEntries(
           Object.entries(translations).filter(
-            ([id, text]) => validIds.has(id) && text.trim(),
+            ([id, text]) => {
+              const cue = cuesById.get(id);
+              return (
+                cue &&
+                text.trim() &&
+                isReadableChineseSubtitle(text, maxChineseChars(cue))
+              );
+            },
           ),
         );
     if (restart) setTranslations({});
-    const pending = tidy.filter((cue) => !nextTranslations[cue.id]);
+    const pending = tidy.filter(
+      (cue) =>
+        !nextTranslations[cue.id] ||
+        !isReadableChineseSubtitle(
+          nextTranslations[cue.id],
+          maxChineseChars(cue),
+        ),
+    );
 
     try {
       if (!pending.length) {
@@ -229,7 +274,7 @@ export default function SubtitleTool() {
         return;
       }
 
-      const groups = batch(pending, 18);
+      const groups = batch(pending, 24);
 
       for (let index = 0; index < groups.length; index += 1) {
         try {
@@ -274,6 +319,13 @@ export default function SubtitleTool() {
   }
 
   function download(bilingual = true) {
+    if (bilingual && overlongCount) {
+      setStatus("error");
+      setMessage(
+        `有 ${overlongCount} 条中文超过双行或阅读速度限制，请在预览中精简后再下载。`,
+      );
+      return;
+    }
     if (bilingual && translatedCount !== tidy.length) {
       setStatus("error");
       setMessage("还有字幕尚未翻译完成。");
@@ -439,16 +491,16 @@ export default function SubtitleTool() {
 
           <fieldset disabled={!sourceCues.length || status === "translating"}>
             <label className="control-label" htmlFor="max-chars">
-              每条英文建议长度
+              每条英文字幕上限
               <output htmlFor="max-chars">{maxChars}</output>
             </label>
             <input
               id="max-chars"
               className="range"
               type="range"
-              min="56"
-              max="160"
-              step="8"
+              min="48"
+              max="84"
+              step="6"
               value={maxChars}
               onChange={(event) => {
                 setMaxChars(Number(event.target.value));
@@ -457,7 +509,7 @@ export default function SubtitleTool() {
             />
             <div className="range-labels">
               <span>短一些</span>
-              <span>长一些，语义更完整</span>
+              <span>最多两行，每行约 42 字符</span>
             </div>
 
             <div className="control-group">
@@ -475,7 +527,7 @@ export default function SubtitleTool() {
                 />
                 <span>
                   <b>拆成下一条字幕</b>
-                  <small>先合并完整句，再按标点与长度分配时间</small>
+                  <small>按语义切分，并贴合原识别片段的时间点</small>
                 </span>
                 <i>推荐</i>
               </label>
@@ -494,7 +546,7 @@ export default function SubtitleTool() {
                 />
                 <span>
                   <b>在原字幕内换行</b>
-                  <small>完全保留现有时间条目</small>
+                  <small>完全保留现有时间条目，长句可能超过两行</small>
                 </span>
               </label>
             </div>
@@ -592,6 +644,7 @@ export default function SubtitleTool() {
               </div>
               <p>
                 已完成 <strong>{translatedCount}</strong> / {tidy.length} 条
+                {overlongCount > 0 && ` · ${overlongCount} 条中文待精简`}
               </p>
             </div>
           )}

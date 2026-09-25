@@ -1,5 +1,8 @@
 # 双语字幕工坊 · Bilingual Subtitle Studio
 
+[![CI](https://github.com/guanzun9-oss/bilingual-subtitle-studio/actions/workflows/ci.yml/badge.svg)](https://github.com/guanzun9-oss/bilingual-subtitle-studio/actions/workflows/ci.yml)
+![Version](https://img.shields.io/badge/version-0.3.0-2563eb)
+
 ![双语字幕工坊 · Bilingual Subtitle Studio](./public/og-v2.png)
 
 一个面向 Buzz 英文识别字幕的中英双语 SRT 整理工具。它会先重新合并被
@@ -33,13 +36,16 @@ Buzz 导出的英文 SRT 经常按照识别时间切成很短的片段。直接�
 ## 主要功能
 
 - 解析标准 SRT，兼容 UTF-8 BOM 与 Windows 换行
-- 自动合并 Buzz 拆散的相邻短时间块
-- 优先在句号、问号、逗号和分号等自然位置断句
+- 自动合并 Buzz 拆散的相邻短时间块，并保留每段原始时间锚点
+- 优先在句号、问号、逗号、分号和自然语法边界断句
+- 英文限制为每行约 42 个字符、每条最多两行
+- 中文限制为每行 16 个字符、每条最多两行，并按显示时长精炼译文
 - 可调节每条英文字幕的建议长度
 - 可选择拆成新时间条目，或仅在原字幕内换行
-- 拆分后按文字比例分配时间，保持原始首尾时间范围
+- 拆分后回到原识别片段定位时间，不再按整句字符比例平分
 - 通过完整句子上下文提高翻译准确度，同时保持逐条严格对应
 - 分批调用 DeepSeek，网络或返回格式异常时自动重试
+- 相同完整句子的上下文只发送一次，并用短 ID/紧凑 JSON 降低 token 消耗
 - 实时显示制作百分比与“已完成/总条数”
 - 失败后保留已完成译文，可选择继续任务或从头重新开始
 - 预览区显示全部字幕，不再只展示前 12 条
@@ -48,8 +54,17 @@ Buzz 导出的英文 SRT 经常按照识别时间切成很短的片段。直接�
 
 ## 当前版本
 
-`v0.2.0`：新增持续制作进度、失败任务恢复与重新开始、全部字幕预览。
+`v0.3.0`：重做时间轴锚定与中英文断句，避免合并后字幕错位和超长字幕。
 完整记录见 [CHANGELOG.md](./CHANGELOG.md)。
+
+## 质量与限制
+
+- 时间轴拆分优先使用 Buzz 原始字幕片段的时间锚点；只有在同一个原始片段内部
+  切分时，才会在该片段的时间范围内估算切点。
+- 工具无法从单独的 SRT 获得音频波形和画面转场信息。要求逐帧精修的影视项目，
+  导出后仍应结合原视频进行最终通看。
+- 服务端会校验模型返回的 ID、中文长度和阅读速度；不完整或超限条目会单独重试，
+  不会重复翻译已经合格的内容。
 
 ## 使用流程
 
@@ -84,12 +99,15 @@ npm run dev
 ### 测试与构建
 
 ```bash
+npm run lint
 npm test
-npm run build
 ```
 
 技术栈：React 19、Next.js 16 / vinext、TypeScript、Cloudflare Workers 和
 DeepSeek Chat Completions API。
+
+每次推送和 Pull Request 都会由 GitHub Actions 自动执行代码检查、生产构建与
+完整测试。
 
 </details>
 

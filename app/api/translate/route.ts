@@ -6,6 +6,7 @@ type TranslationItem = {
   id: string;
   text: string;
   context?: string;
+  maxChineseChars?: number;
 };
 
 type ParsedTranslation = {
@@ -62,7 +63,7 @@ function extractJson(content: string) {
 
 function normalizeTranslations(
   value: unknown,
-  expectedIds: Set<string>,
+  expectedLimits: Map<string, number>,
 ): Record<string, string> {
   const result: Record<string, string> = {};
   if (!value || typeof value !== "object") return result;
@@ -75,16 +76,23 @@ function normalizeTranslations(
   if (Array.isArray(translations)) {
     for (const item of translations) {
       if (
-        expectedIds.has(item?.id) &&
+        expectedLimits.has(item?.id) &&
         typeof item?.text === "string" &&
-        item.text.trim()
+        item.text.trim() &&
+        Array.from(item.text.replace(/\s/g, "")).length <=
+          expectedLimits.get(item.id)!
       ) {
         result[item.id] = item.text.trim();
       }
     }
   } else if (translations && typeof translations === "object") {
     for (const [id, text] of Object.entries(translations)) {
-      if (expectedIds.has(id) && typeof text === "string" && text.trim()) {
+      if (
+        expectedLimits.has(id) &&
+        typeof text === "string" &&
+        text.trim() &&
+        Array.from(text.replace(/\s/g, "")).length <= expectedLimits.get(id)!
+      ) {
         result[id] = text.trim();
       }
     }
@@ -100,6 +108,32 @@ async function requestDeepSeek(
 ) {
   let lastError: ApiError | null = null;
 
+  // Context is often identical for several pieces cut from the same sentence.
+  // Send it once and use short request-local IDs to reduce input and output tokens.
+  const contexts: string[] = [];
+  const contextIndexes = new Map<string, number>();
+  const idMap = new Map<string, string>();
+  const compactItems = items.map((item, index) => {
+    const id = `s${index}`;
+    const context = item.context || item.text;
+    let contextIndex: number | undefined;
+    if (context !== item.text) {
+      contextIndex = contextIndexes.get(context);
+      if (contextIndex === undefined) {
+        contextIndex = contexts.length;
+        contexts.push(context);
+        contextIndexes.set(context, contextIndex);
+      }
+    }
+    idMap.set(id, item.id);
+    return {
+      id,
+      t: item.text,
+      c: contextIndex,
+      m: item.maxChineseChars || 32,
+    };
+  });
+
   for (let attempt = 0; attempt < 3; attempt += 1) {
     try {
       const response = await fetch("https://api.deepseek.com/chat/completions", {
@@ -112,17 +146,17 @@ async function requestDeepSeek(
           model,
           thinking: { type: "disabled" },
           temperature: 0,
-          max_tokens: 5_000,
+          max_tokens: 2_200,
           response_format: { type: "json_object" },
           messages: [
             {
               role: "system",
               content:
-                "你是专业影视字幕译者。每个条目必须独立对齐：只翻译 text，不得把相邻条目的内容移动、补写或合并。context 只用于理解当前片段在完整句子中的含义，绝对不要翻译整个 context。译文使用自然简洁的简体中文，保留人名、术语、语气和标记。必须返回 JSON：{\"translations\":[{\"id\":\"原id\",\"text\":\"对应中文\"}]}，每个输入 id 恰好出现一次，不要解释。",
+                "专业影视字幕英译简中。输入中 c 是共享上下文数组，s 是条目；每项 t 才是待译文本，c 索引仅供理解，m 是含标点的中文字符上限。逐项严格对齐，不移动、合并或补写相邻内容。译文自然口语化、精炼且不换行，保留人名、术语和语气，在不遗漏核心信息下严格满足 m。只返回 JSON 对象：{\"translations\":{\"s0\":\"译文\"}}，每个 id 恰好一次。",
             },
             {
               role: "user",
-              content: JSON.stringify({ subtitles: items }),
+              content: JSON.stringify({ c: contexts, s: compactItems }),
             },
           ],
         }),
@@ -160,8 +194,19 @@ async function requestDeepSeek(
         const content = data.choices?.[0]?.message?.content;
         if (!content) throw new Error("missing content");
 
-        const expectedIds = new Set(items.map((item) => item.id));
-        const parsed = normalizeTranslations(extractJson(content), expectedIds);
+        const expectedLimits = new Map(
+          compactItems.map((item) => [item.id, item.m]),
+        );
+        const compactTranslations = normalizeTranslations(
+          extractJson(content),
+          expectedLimits,
+        );
+        const parsed = Object.fromEntries(
+          Object.entries(compactTranslations).map(([id, text]) => [
+            idMap.get(id)!,
+            text,
+          ]),
+        );
         if (Object.keys(parsed).length) return parsed;
         lastError = new ApiError("翻译结果格式异常。", 502);
       }
@@ -210,6 +255,10 @@ export async function POST(request: Request) {
         typeof item?.text === "string" &&
         item.id.length <= 100 &&
         item.text.length <= 2_000 &&
+        (item.maxChineseChars === undefined ||
+          (Number.isInteger(item.maxChineseChars) &&
+            item.maxChineseChars >= 8 &&
+            item.maxChineseChars <= 32)) &&
         (item.context === undefined ||
           (typeof item.context === "string" && item.context.length <= 4_000)),
     )
@@ -217,6 +266,7 @@ export async function POST(request: Request) {
       id: item.id,
       text: item.text.trim(),
       context: item.context?.trim() || item.text.trim(),
+      maxChineseChars: item.maxChineseChars || 32,
     }));
 
   if (safeItems.length !== items.length || safeItems.some((item) => !item.text)) {

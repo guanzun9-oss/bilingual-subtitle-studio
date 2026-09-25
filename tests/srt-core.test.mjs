@@ -3,9 +3,11 @@ import test from "node:test";
 import {
   mergeFragmentedCues,
   parseSrt,
+  isReadableChineseSubtitle,
   serializeSrt,
   splitAtNaturalBreaks,
   tidyCues,
+  wrapChineseSubtitle,
 } from "../lib/srt-core.mjs";
 
 const SAMPLE = `\uFEFF1\r
@@ -55,20 +57,16 @@ to that point happened in two days.`);
   assert.equal(merged[0].startMs, 0);
   assert.equal(merged[0].endMs, 12031);
 
-  const tidy = tidyCues(fragmented, { maxChars: 112, mode: "new-cue" });
-  assert.equal(tidy.length, 2);
+  const tidy = tidyCues(fragmented, { maxChars: 72, mode: "new-cue" });
+  assert.equal(tidy.length, 3);
   assert.equal(
-    tidy[0].text,
-    "You cannot control what a great military event can set loose.",
-  );
-  assert.equal(
-    tidy[1].text,
-    "More battle casualties than US forces had suffered in every war combined down to that point happened in two days.",
+    tidy.map((cue) => cue.text.replace(/\n/g, " ")).join(" "),
+    merged[0].text,
   );
   assert.equal(tidy[0].contextText, merged[0].text);
 });
 
-test("new cues preserve the original time range", () => {
+test("new cues preserve the original time range without overlapping", () => {
   const source = parseSrt(SAMPLE);
   const tidy = tidyCues(source, { maxChars: 32, mode: "new-cue" });
   const firstSourceParts = tidy.filter((cue) => cue.sourceId === "source-1");
@@ -76,8 +74,55 @@ test("new cues preserve the original time range", () => {
   assert.equal(firstSourceParts[0].startMs, source[0].startMs);
   assert.equal(firstSourceParts.at(-1).endMs, source[0].endMs);
   for (let index = 1; index < firstSourceParts.length; index += 1) {
-    assert.equal(firstSourceParts[index - 1].endMs, firstSourceParts[index].startMs);
+    assert.ok(firstSourceParts[index - 1].endMs <= firstSourceParts[index].startMs);
   }
+});
+
+test("uses original recognition timestamps instead of whole-sentence character ratios", () => {
+  const fragmented = parseSrt(`1
+00:00:00,000 --> 00:00:02,000
+This opening clause has a natural comma,
+
+2
+00:00:04,000 --> 00:00:08,000
+and the rest of the sentence continues for long enough to require splitting.`);
+
+  const tidy = tidyCues(fragmented, { maxChars: 48 });
+  assert.ok(tidy.length >= 2);
+  assert.equal(tidy[0].endMs, 2000);
+  assert.equal(tidy[1].startMs, 4000);
+});
+
+test("keeps prepared English to two 42-character lines", () => {
+  const [cue] = tidyCues(parseSrt(`1
+00:00:00,000 --> 00:00:06,000
+This sentence is deliberately long enough to wrap neatly across two readable subtitle lines.`), {
+    maxChars: 72,
+  });
+  const lines = cue.text.split("\n");
+  assert.ok(lines.length <= 2);
+  assert.ok(lines.every((line) => line.length <= 42));
+});
+
+test("does not create a third line when a short sentence comes first", () => {
+  const [cue] = tidyCues(parseSrt(`1
+00:00:00,000 --> 00:00:06,000
+We agreed. This following sentence is still long enough to need a carefully balanced second line.`), {
+    maxChars: 84,
+  });
+  const lines = cue.text.split("\n");
+  assert.equal(lines.length, 2);
+  assert.ok(lines.every((line) => line.length <= 42));
+});
+
+test("wraps readable Chinese into 16-character lines", () => {
+  const chinese = "这是一条长度合适而且断句自然的中文字幕";
+  const lines = wrapChineseSubtitle(chinese).split("\n");
+  assert.ok(lines.length <= 2);
+  assert.ok(lines.every((line) => Array.from(line).length <= 16));
+  assert.ok(Array.from(lines[0]).length <= Array.from(lines[1]).length);
+  assert.equal(isReadableChineseSubtitle(chinese), true);
+  assert.equal(isReadableChineseSubtitle(chinese.repeat(2)), false);
 });
 
 test("serializes Chinese first with UTF-8 BOM", () => {
