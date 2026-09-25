@@ -146,7 +146,9 @@ async function requestDeepSeek(
           model,
           thinking: { type: "disabled" },
           temperature: 0,
-          max_tokens: 2_200,
+          // This is only an output ceiling, not a reserved-token charge. Keep
+          // enough headroom so a valid JSON response is not cut off mid-item.
+          max_tokens: 4_000,
           response_format: { type: "json_object" },
           messages: [
             {

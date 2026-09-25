@@ -1,6 +1,6 @@
 {
   "name": "bilingual-subtitle-studio",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Turn Buzz English SRT files into naturally segmented, time-aligned bilingual subtitles.",
   "private": true,
   "homepage": "https://bilingual-subtitle-studio.guanzun9-tools.workers.dev",

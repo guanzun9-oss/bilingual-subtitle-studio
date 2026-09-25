@@ -158,71 +158,89 @@ export default function SubtitleTool() {
   async function requestTranslationGroup(
     initialGroup: Cue[],
     controller: AbortController,
+    onProgress?: (translations: Record<string, string>) => void,
   ) {
-    let remaining = initialGroup;
     const completed: Record<string, string> = {};
-    let lastMessage = "翻译失败，请稍后重试。";
 
-    for (let attempt = 0; attempt < 3 && remaining.length; attempt += 1) {
-      try {
-        const response = await fetch("/api/translate", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          signal: controller.signal,
-          body: JSON.stringify({
-            apiKey: apiKey.trim(),
-            model,
-            items: remaining.map((cue) => ({
-              id: cue.id,
-              text: cue.text.replace(/\n/g, " "),
-              context: (cue.contextText || cue.text).replace(/\n/g, " "),
-              maxChineseChars: maxChineseChars(cue),
-            })),
-          }),
-        });
+    async function translateBatch(group: Cue[]): Promise<void> {
+      let remaining = group.filter((cue) => !completed[cue.id]);
+      let lastMessage = "翻译失败，请稍后重试。";
+      let canSplit = false;
 
-        let data: {
-          error?: string;
-          translations?: Record<string, string>;
-        } = {};
+      for (let attempt = 0; attempt < 2 && remaining.length; attempt += 1) {
         try {
-          data = (await response.json()) as typeof data;
-        } catch {
-          lastMessage = "服务器返回异常，正在自动重试。";
+          const response = await fetch("/api/translate", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            signal: controller.signal,
+            body: JSON.stringify({
+              apiKey: apiKey.trim(),
+              model,
+              items: remaining.map((cue) => ({
+                id: cue.id,
+                text: cue.text.replace(/\n/g, " "),
+                context: (cue.contextText || cue.text).replace(/\n/g, " "),
+                maxChineseChars: maxChineseChars(cue),
+              })),
+            }),
+          });
+
+          let data: {
+            error?: string;
+            translations?: Record<string, string>;
+          } = {};
+          try {
+            data = (await response.json()) as typeof data;
+          } catch {
+            lastMessage = "服务器返回异常，正在自动缩小批次。";
+          }
+
+          if (data.translations && Object.keys(data.translations).length) {
+            Object.assign(completed, data.translations);
+            onProgress?.({ ...completed });
+          }
+          remaining = remaining.filter((cue) => !completed[cue.id]);
+          if (!remaining.length) return;
+
+          lastMessage = data.error || lastMessage;
+          if ([401, 403, 429].includes(response.status)) {
+            const terminalError = new Error(lastMessage) as Error & {
+              terminal?: boolean;
+            };
+            terminalError.terminal = true;
+            throw terminalError;
+          }
+          canSplit = response.status >= 500;
+        } catch (error) {
+          if (controller.signal.aborted) throw error;
+          if ((error as Error & { terminal?: boolean }).terminal) throw error;
+          lastMessage =
+            error instanceof Error && error.message
+              ? error.message
+              : "网络连接中断，正在自动重试。";
         }
 
-        if (data.translations) Object.assign(completed, data.translations);
-        remaining = remaining.filter((cue) => !completed[cue.id]);
-        if (!remaining.length) return completed;
-
-        lastMessage = data.error || lastMessage;
-        if (response.status === 401 || response.status === 403) {
-          throw new Error(lastMessage);
+        if (attempt < 1) {
+          await new Promise((resolve) => setTimeout(resolve, 900));
         }
-      } catch (error) {
-        if (controller.signal.aborted) throw error;
-        if (
-          error instanceof Error &&
-          /API Key|访问权限/.test(error.message)
-        ) {
-          throw error;
-        }
-        lastMessage =
-          error instanceof Error && error.message
-            ? error.message
-            : "网络连接中断，正在自动重试。";
       }
 
-      if (attempt < 2) {
-        await new Promise((resolve) => setTimeout(resolve, 900 * 2 ** attempt));
+      if (canSplit && remaining.length > 1) {
+        const middle = Math.ceil(remaining.length / 2);
+        await translateBatch(remaining.slice(0, middle));
+        await translateBatch(remaining.slice(middle));
+        return;
       }
+
+      const error = new Error(lastMessage) as Error & {
+        partial?: Record<string, string>;
+      };
+      error.partial = completed;
+      throw error;
     }
 
-    const error = new Error(lastMessage) as Error & {
-      partial?: Record<string, string>;
-    };
-    error.partial = completed;
-    throw error;
+    await translateBatch(initialGroup);
+    return completed;
   }
 
   async function translate(restart = false) {
@@ -274,13 +292,20 @@ export default function SubtitleTool() {
         return;
       }
 
-      const groups = batch(pending, 24);
+      const groups = batch(pending, 12);
 
       for (let index = 0; index < groups.length; index += 1) {
         try {
           Object.assign(
             nextTranslations,
-            await requestTranslationGroup(groups[index], controller),
+            await requestTranslationGroup(
+              groups[index],
+              controller,
+              (partial) => {
+                Object.assign(nextTranslations, partial);
+                setTranslations({ ...nextTranslations });
+              },
+            ),
           );
         } catch (error) {
           const partial = (error as Error & {
