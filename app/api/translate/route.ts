@@ -63,7 +63,7 @@ function extractJson(content: string) {
 
 function normalizeTranslations(
   value: unknown,
-  expectedLimits: Map<string, number>,
+  expectedIds: Set<string>,
 ): Record<string, string> {
   const result: Record<string, string> = {};
   if (!value || typeof value !== "object") return result;
@@ -76,11 +76,9 @@ function normalizeTranslations(
   if (Array.isArray(translations)) {
     for (const item of translations) {
       if (
-        expectedLimits.has(item?.id) &&
+        expectedIds.has(item?.id) &&
         typeof item?.text === "string" &&
-        item.text.trim() &&
-        Array.from(item.text.replace(/\s/g, "")).length <=
-          expectedLimits.get(item.id)!
+        item.text.trim()
       ) {
         result[item.id] = item.text.trim();
       }
@@ -88,10 +86,9 @@ function normalizeTranslations(
   } else if (translations && typeof translations === "object") {
     for (const [id, text] of Object.entries(translations)) {
       if (
-        expectedLimits.has(id) &&
+        expectedIds.has(id) &&
         typeof text === "string" &&
-        text.trim() &&
-        Array.from(text.replace(/\s/g, "")).length <= expectedLimits.get(id)!
+        text.trim()
       ) {
         result[id] = text.trim();
       }
@@ -196,12 +193,13 @@ async function requestDeepSeek(
         const content = data.choices?.[0]?.message?.content;
         if (!content) throw new Error("missing content");
 
-        const expectedLimits = new Map(
-          compactItems.map((item) => [item.id, item.m]),
-        );
+        // m is a translation-quality target, not a transport-validity rule.
+        // Models may exceed it by a few characters; discarding such a valid
+        // result makes the same cue retry forever.
+        const expectedIds = new Set(compactItems.map((item) => item.id));
         const compactTranslations = normalizeTranslations(
           extractJson(content),
-          expectedLimits,
+          expectedIds,
         );
         const parsed = Object.fromEntries(
           Object.entries(compactTranslations).map(([id, text]) => [

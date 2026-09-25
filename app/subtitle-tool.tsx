@@ -80,15 +80,7 @@ export default function SubtitleTool() {
   );
 
   const translatedCount = useMemo(
-    () =>
-      tidy.filter(
-        (cue) =>
-          translations[cue.id]?.trim() &&
-          isReadableChineseSubtitle(
-            translations[cue.id],
-            maxChineseChars(cue),
-          ),
-      ).length,
+    () => tidy.filter((cue) => translations[cue.id]?.trim()).length,
     [tidy, translations],
   );
 
@@ -265,25 +257,11 @@ export default function SubtitleTool() {
       ? {}
       : Object.fromEntries(
           Object.entries(translations).filter(
-            ([id, text]) => {
-              const cue = cuesById.get(id);
-              return (
-                cue &&
-                text.trim() &&
-                isReadableChineseSubtitle(text, maxChineseChars(cue))
-              );
-            },
+            ([id, text]) => cuesById.has(id) && text.trim(),
           ),
         );
     if (restart) setTranslations({});
-    const pending = tidy.filter(
-      (cue) =>
-        !nextTranslations[cue.id] ||
-        !isReadableChineseSubtitle(
-          nextTranslations[cue.id],
-          maxChineseChars(cue),
-        ),
-    );
+    const pending = tidy.filter((cue) => !nextTranslations[cue.id]?.trim());
 
     try {
       if (!pending.length) {
@@ -318,8 +296,20 @@ export default function SubtitleTool() {
         setTranslations({ ...nextTranslations });
       }
 
+      const finalOverlongCount = tidy.filter(
+        (cue) =>
+          nextTranslations[cue.id]?.trim() &&
+          !isReadableChineseSubtitle(
+            nextTranslations[cue.id],
+            maxChineseChars(cue),
+          ),
+      ).length;
       setStatus("done");
-      setMessage("翻译完成，可以检查预览并下载。");
+      setMessage(
+        finalOverlongCount
+          ? `翻译完成，其中 ${finalOverlongCount} 条偏长，建议在预览中精简后下载。`
+          : "翻译完成，可以检查预览并下载。",
+      );
     } catch (error) {
       if (controller.signal.aborted) {
         setStatus("ready");
@@ -344,13 +334,6 @@ export default function SubtitleTool() {
   }
 
   function download(bilingual = true) {
-    if (bilingual && overlongCount) {
-      setStatus("error");
-      setMessage(
-        `有 ${overlongCount} 条中文超过双行或阅读速度限制，请在预览中精简后再下载。`,
-      );
-      return;
-    }
     if (bilingual && translatedCount !== tidy.length) {
       setStatus("error");
       setMessage("还有字幕尚未翻译完成。");
@@ -371,6 +354,10 @@ export default function SubtitleTool() {
     }.srt`;
     anchor.click();
     URL.revokeObjectURL(url);
+    if (bilingual && overlongCount) {
+      setStatus("done");
+      setMessage(`已导出；其中 ${overlongCount} 条偏长，建议播放时重点检查。`);
+    }
   }
 
   return (

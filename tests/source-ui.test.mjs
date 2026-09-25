@@ -31,3 +31,11 @@ test("translation recovers malformed batches without losing progress", async () 
   assert.match(source, /remaining\.slice\(middle\)/);
   assert.match(source, /onProgress\?\./);
 });
+
+test("overlong translations are quality warnings, not failed work", async () => {
+  const source = await readFile(sourceUrl, "utf8");
+
+  assert.match(source, /translations\[cue\.id\]\?\.trim\(\)/);
+  assert.match(source, /pending = tidy\.filter\(\(cue\) => !nextTranslations\[cue\.id\]\?\.trim\(\)\)/);
+  assert.doesNotMatch(source, /if \(bilingual && overlongCount\) \{[\s\S]{0,200}?return;/);
+});
