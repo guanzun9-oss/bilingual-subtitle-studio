@@ -1,6 +1,5 @@
 # 双语字幕工坊 · Bilingual Subtitle Studio
 
-[![CI](https://github.com/guanzun9-oss/bilingual-subtitle-studio/actions/workflows/ci.yml/badge.svg)](https://github.com/guanzun9-oss/bilingual-subtitle-studio/actions/workflows/ci.yml)
 ![Version](https://img.shields.io/badge/version-0.3.0-2563eb)
 
 ![双语字幕工坊 · Bilingual Subtitle Studio](./public/og-v2.png)
@@ -105,9 +104,6 @@ npm test
 
 技术栈：React 19、Next.js 16 / vinext、TypeScript、Cloudflare Workers 和
 DeepSeek Chat Completions API。
-
-每次推送和 Pull Request 都会由 GitHub Actions 自动执行代码检查、生产构建与
-完整测试。
 
 </details>
 
