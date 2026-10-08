@@ -3,17 +3,19 @@
 import { useMemo, useRef, useState } from "react";
 import {
   formatTimestamp,
+  getSubtitleWarnings,
   isReadableChineseSubtitle,
   parseSrt,
   serializeSrt,
   subtitleDuration,
   tidyCues,
+  wrapChineseSubtitle,
 } from "@/lib/srt-core.mjs";
+import { EDITOR_PROFILES, getSubtitleProfile } from "@/lib/subtitle-profiles.mjs";
 
 type Cue = {
   id: string;
   sourceId: string;
-  sourceIds?: string[];
   startMs: number;
   endMs: number;
   text: string;
@@ -29,7 +31,7 @@ When we started this project, we thought the hardest part would be the technolog
 
 2
 00:00:09,100 --> 00:00:14,800
-That changed everything, and it gave us a much clearer direction for the future.`;
+That changed everything. What should we do next? Let's find out!`;
 
 function formatDuration(ms: number) {
   const totalSeconds = Math.round(ms / 1000);
@@ -50,10 +52,10 @@ function sanitizeFileName(name: string) {
   return name.replace(/\.srt$/i, "").replace(/[\\/:*?"<>|]/g, "-");
 }
 
-function maxChineseChars(cue: Cue) {
+function maxChineseChars(cue: Cue, lineChars = 16) {
   return Math.max(
     8,
-    Math.min(32, Math.floor(((cue.endMs - cue.startMs) / 1000) * 9)),
+    Math.min(lineChars * 2, Math.floor(((cue.endMs - cue.startMs) / 1000) * 9)),
   );
 }
 
@@ -64,6 +66,10 @@ export default function SubtitleTool() {
   const [sourceCues, setSourceCues] = useState<Cue[]>([]);
   const [maxChars, setMaxChars] = useState(72);
   const [mode, setMode] = useState<Mode>("new-cue");
+  const [editor, setEditor] = useState("generic");
+  const [frame, setFrame] = useState("landscape");
+  const [timeOffsetSeconds, setTimeOffsetSeconds] = useState(0);
+  const [previewIndex, setPreviewIndex] = useState(0);
   const [order, setOrder] = useState<Order>("chinese-first");
   const [model, setModel] = useState("deepseek-v4-flash");
   const [apiKey, setApiKey] = useState("");
@@ -74,10 +80,28 @@ export default function SubtitleTool() {
   const [message, setMessage] = useState("");
   const [dragging, setDragging] = useState(false);
 
-  const tidy = useMemo(
-    () => tidyCues(sourceCues, { maxChars, mode }) as Cue[],
-    [sourceCues, maxChars, mode],
+  const profile = useMemo(() => getSubtitleProfile(editor, frame), [editor, frame]);
+  const prepared = useMemo(
+    () => {
+      try {
+        return {
+          cues: tidyCues(sourceCues, { maxChars, mode, lineChars: profile.englishLineChars }) as Cue[],
+          error: "",
+        };
+      } catch (error) {
+        return { cues: [] as Cue[], error: error instanceof Error ? error.message : "字幕断句失败。" };
+      }
+    },
+    [sourceCues, maxChars, mode, profile],
   );
+  const tidy = prepared.cues;
+  const activePreviewIndex = Math.min(previewIndex, Math.max(0, tidy.length - 1));
+  const previewCue = tidy[activePreviewIndex];
+  const cueWarnings = useMemo(
+    () => Object.fromEntries(tidy.map((cue) => [cue.id, getSubtitleWarnings(cue, translations[cue.id] || "", profile)])),
+    [tidy, translations, profile],
+  );
+  const qualityWarningCount = Object.values(cueWarnings).filter((warnings) => warnings.length > 0).length;
 
   const translatedCount = useMemo(
     () => tidy.filter((cue) => translations[cue.id]?.trim()).length,
@@ -91,10 +115,10 @@ export default function SubtitleTool() {
           translations[cue.id]?.trim() &&
           !isReadableChineseSubtitle(
             translations[cue.id],
-            maxChineseChars(cue),
+            maxChineseChars(cue, profile.chineseLineChars),
           ),
       ).length,
-    [tidy, translations],
+    [tidy, translations, profile],
   );
 
   const progress = tidy.length
@@ -123,6 +147,7 @@ export default function SubtitleTool() {
       const cues = parseSrt(text) as Cue[];
       setSourceName(name);
       setSourceCues(cues);
+      setPreviewIndex(0);
       setTranslations({});
       setStatus("ready");
       setMessage("");
@@ -172,7 +197,7 @@ export default function SubtitleTool() {
                 id: cue.id,
                 text: cue.text.replace(/\n/g, " "),
                 context: (cue.contextText || cue.text).replace(/\n/g, " "),
-                maxChineseChars: maxChineseChars(cue),
+                maxChineseChars: maxChineseChars(cue, profile.chineseLineChars),
               })),
             }),
           });
@@ -241,6 +266,11 @@ export default function SubtitleTool() {
       setMessage("请先导入英文 SRT 文件。");
       return;
     }
+    if (!tidy.length) {
+      setStatus("error");
+      setMessage(prepared.error || "没有可翻译的字幕。");
+      return;
+    }
     if (!apiKey.trim()) {
       setStatus("error");
       setMessage("请填写 DeepSeek API Key。");
@@ -301,7 +331,7 @@ export default function SubtitleTool() {
           nextTranslations[cue.id]?.trim() &&
           !isReadableChineseSubtitle(
             nextTranslations[cue.id],
-            maxChineseChars(cue),
+            maxChineseChars(cue, profile.chineseLineChars),
           ),
       ).length;
       setStatus("done");
@@ -334,24 +364,33 @@ export default function SubtitleTool() {
   }
 
   function download(bilingual = true) {
+    if (!tidy.length) return;
     if (bilingual && translatedCount !== tidy.length) {
       setStatus("error");
       setMessage("还有字幕尚未翻译完成。");
       return;
     }
 
-    const content = serializeSrt(tidy, translations, {
-      order,
-      bilingual,
-      includeBom: true,
-    });
+    let content: string;
+    try {
+      content = serializeSrt(tidy, translations, {
+        ...profile,
+        order,
+        bilingual,
+        timeOffsetMs: timeOffsetSeconds * 1000,
+      });
+    } catch (error) {
+      setStatus("error");
+      setMessage(error instanceof Error ? error.message : "导出失败。");
+      return;
+    }
     const blob = new Blob([content], { type: "text/plain;charset=utf-8" });
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement("a");
     anchor.href = url;
     anchor.download = `${sanitizeFileName(sourceName || "subtitle")}.${
       bilingual ? "中英双语" : "已整理英文"
-    }.srt`;
+    }.${profile.suffix}.srt`;
     anchor.click();
     URL.revokeObjectURL(url);
     if (bilingual && overlongCount) {
@@ -361,432 +400,212 @@ export default function SubtitleTool() {
   }
 
   return (
-    <main>
+    <main id="top">
       <header className="site-header">
-        <a className="brand" href="#top" aria-label="双语字幕工坊首页">
-          <span className="brand-mark" aria-hidden="true">
-            A<span>译</span>
-          </span>
-          <span>
-            双语字幕工坊
-            <small>SRT BILINGUAL STUDIO</small>
-          </span>
-        </a>
-        <div className="header-note">
-          <span className="privacy-dot" />
-          无需安装 · 无需 ChatGPT 登录
-        </div>
+        <h1>双语字幕工坊</h1>
+        <span>Buzz SRT → 中英双语</span>
       </header>
 
-      <section className="hero" id="top">
-        <div className="eyebrow">
-          <span>打开即用</span>
-          <i />
-          英文 SRT → 中英双语
-        </div>
-        <h1>
-          英文 SRT，一步变成
-          <em>自然对齐的双语字幕</em>
-        </h1>
-        <p>
-          无需安装软件。上传 Buzz 导出的英文 SRT，工具会自动整理断句，
-          再用你的 DeepSeek API Key 翻译并导出双语字幕。
-        </p>
-      </section>
-
-      <nav className="steps" aria-label="制作步骤">
-        {[
-          ["01", "导入字幕"],
-          ["02", "整理断句"],
-          ["03", "翻译导出"],
-        ].map(([number, label], index) => (
-          <div
-            className={`step ${
-              sourceCues.length && index < 2
-                ? "active"
-                : status === "done" && index === 2
-                  ? "active"
-                  : ""
-            }`}
-            key={number}
-          >
-            <span>{number}</span>
-            {label}
-          </div>
-        ))}
-      </nav>
-
-      <section className="workspace">
-        <div className="panel import-panel">
-          <div className="panel-heading">
-            <span className="panel-number">01</span>
-            <div>
-              <h2>导入英文字幕</h2>
-              <p>支持 Buzz 导出的标准 SRT，文件不会被保存。</p>
-            </div>
-          </div>
-
-          <div
-            className={`drop-zone ${dragging ? "dragging" : ""} ${
-              sourceCues.length ? "has-file" : ""
-            }`}
-            onDragEnter={(event) => {
-              event.preventDefault();
-              setDragging(true);
-            }}
-            onDragOver={(event) => event.preventDefault()}
-            onDragLeave={() => setDragging(false)}
-            onDrop={(event) => {
-              event.preventDefault();
-              setDragging(false);
-              void loadFile(event.dataTransfer.files[0]);
-            }}
-          >
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept=".srt,application/x-subrip,text/plain"
-              onChange={(event) => void loadFile(event.target.files?.[0])}
-              aria-label="选择 SRT 文件"
-            />
-            <div className="upload-icon" aria-hidden="true">
-              ↑
-            </div>
-            {sourceCues.length ? (
-              <>
-                <strong>{sourceName}</strong>
-                <span>
-                  {sourceCues.length} 条原字幕 ·{" "}
-                  {formatDuration(subtitleDuration(sourceCues))}
-                </span>
-                <button
-                  className="text-button"
-                  type="button"
-                  onClick={() => fileInputRef.current?.click()}
-                >
-                  更换文件
-                </button>
-              </>
-            ) : (
-              <>
-                <strong>拖入 SRT 文件</strong>
-                <span>或点击选择文件，最大 4 MB</span>
-                <div className="drop-actions">
-                  <button
-                    className="secondary-button"
-                    type="button"
-                    onClick={() => fileInputRef.current?.click()}
-                  >
-                    选择文件
-                  </button>
-                  <button
-                    className="text-button"
-                    type="button"
-                    onClick={() => void loadText(SAMPLE_SRT, "演示字幕.srt")}
-                  >
-                    载入演示
-                  </button>
-                </div>
-              </>
-            )}
-          </div>
-        </div>
-
-        <div className={`panel settings-panel ${!sourceCues.length ? "muted" : ""}`}>
-          <div className="panel-heading">
-            <span className="panel-number coral">02</span>
-            <div>
-              <h2>整理断句</h2>
-              <p>先合并同一句，再设置理想长度与呈现方式。</p>
-            </div>
-          </div>
-
-          <fieldset disabled={!sourceCues.length || status === "translating"}>
-            <label className="control-label" htmlFor="max-chars">
-              每条英文字幕上限
-              <output htmlFor="max-chars">{maxChars}</output>
-            </label>
-            <input
-              id="max-chars"
-              className="range"
-              type="range"
-              min="48"
-              max="84"
-              step="6"
-              value={maxChars}
-              onChange={(event) => {
-                setMaxChars(Number(event.target.value));
-                resetOutput();
+      <div className="workspace">
+        <aside className="controls-panel" aria-label="字幕制作设置">
+          <section className="control-section import-panel">
+            <h2>导入字幕</h2>
+            <div
+              className={`drop-zone ${dragging ? "dragging" : ""} ${sourceCues.length ? "has-file" : ""}`}
+              onDragEnter={(event) => { event.preventDefault(); setDragging(true); }}
+              onDragOver={(event) => event.preventDefault()}
+              onDragLeave={() => setDragging(false)}
+              onDrop={(event) => {
+                event.preventDefault();
+                setDragging(false);
+                if (status !== "translating") void loadFile(event.dataTransfer.files[0]);
               }}
-            />
-            <div className="range-labels">
-              <span>短一些</span>
-              <span>最多两行，每行约 42 字符</span>
-            </div>
-
-            <div className="control-group">
-              <span className="control-label">长句处理方式</span>
-              <label className={`choice ${mode === "new-cue" ? "selected" : ""}`}>
-                <input
-                  type="radio"
-                  name="mode"
-                  value="new-cue"
-                  checked={mode === "new-cue"}
-                  onChange={() => {
-                    setMode("new-cue");
-                    resetOutput();
-                  }}
-                />
-                <span>
-                  <b>拆成下一条字幕</b>
-                  <small>按语义切分，并贴合原识别片段的时间点</small>
-                </span>
-                <i>推荐</i>
-              </label>
-              <label
-                className={`choice ${mode === "line-break" ? "selected" : ""}`}
-              >
-                <input
-                  type="radio"
-                  name="mode"
-                  value="line-break"
-                  checked={mode === "line-break"}
-                  onChange={() => {
-                    setMode("line-break");
-                    resetOutput();
-                  }}
-                />
-                <span>
-                  <b>在原字幕内换行</b>
-                  <small>完全保留现有时间条目，长句可能超过两行</small>
-                </span>
-              </label>
-            </div>
-
-            <div className="result-strip">
-              <div>
-                <span>整理前</span>
-                <strong>{sourceCues.length || "—"}</strong>
-                <small>条</small>
-              </div>
-              <span className="result-arrow">→</span>
-              <div>
-                <span>整理后</span>
-                <strong>{tidy.length || "—"}</strong>
-                <small>条</small>
-              </div>
-              <div className="natural-tag">先合并完整句</div>
-            </div>
-          </fieldset>
-        </div>
-
-        <div className={`panel translate-panel ${!sourceCues.length ? "muted" : ""}`}>
-          <div className="panel-heading">
-            <span className="panel-number ink">03</span>
-            <div>
-              <h2>DeepSeek 翻译</h2>
-              <p>自动重试并保留进度，确保每条中英文对应。</p>
-            </div>
-          </div>
-
-          <fieldset disabled={!sourceCues.length || status === "translating"}>
-            <label className="control-label" htmlFor="api-key">
-              DeepSeek API Key
-              <span className="safe-label">不保存</span>
-            </label>
-            <div className="key-input">
-              <span aria-hidden="true">●</span>
+            >
               <input
-                id="api-key"
-                type="password"
-                autoComplete="off"
-                spellCheck="false"
-                value={apiKey}
-                placeholder="sk-..."
-                onChange={(event) => setApiKey(event.target.value)}
+                ref={fileInputRef}
+                type="file"
+                accept=".srt,application/x-subrip,text/plain"
+                disabled={status === "translating"}
+                onChange={(event) => void loadFile(event.target.files?.[0])}
+                aria-label="选择 SRT 文件"
               />
-            </div>
-            <p className="key-help">
-              这是唯一需要准备的内容，Key 只用于当次翻译。
-              <a
-                href="https://platform.deepseek.com/api_keys"
-                target="_blank"
-                rel="noreferrer"
-              >
-                获取 DeepSeek API Key
-              </a>
-            </p>
-
-            <div className="two-columns">
-              <label>
-                <span className="control-label">翻译模型</span>
-                <select value={model} onChange={(event) => setModel(event.target.value)}>
-                  <option value="deepseek-v4-flash">V4 Flash · 快速省钱</option>
-                  <option value="deepseek-v4-pro">V4 Pro · 质量优先</option>
-                </select>
-              </label>
-              <label>
-                <span className="control-label">双语顺序</span>
-                <select
-                  value={order}
-                  onChange={(event) => setOrder(event.target.value as Order)}
-                >
-                  <option value="chinese-first">中文在上 / 英文在下</option>
-                  <option value="english-first">英文在上 / 中文在下</option>
-                </select>
-              </label>
-            </div>
-          </fieldset>
-
-          {sourceCues.length > 0 && (
-            <div className={`progress-box ${status}`} aria-live="polite">
-              <div className="progress-heading">
-                <span>{progressLabel}</span>
-                <strong>{progress}%</strong>
-              </div>
-              <div
-                className="progress-track"
-                role="progressbar"
-                aria-label="双语字幕制作进度"
-                aria-valuemin={0}
-                aria-valuemax={100}
-                aria-valuenow={progress}
-              >
-                <i style={{ width: `${progress}%` }} />
-              </div>
-              <p>
-                已完成 <strong>{translatedCount}</strong> / {tidy.length} 条
-                {overlongCount > 0 && ` · ${overlongCount} 条中文待精简`}
-              </p>
-            </div>
-          )}
-
-          {status === "translating" ? (
-            <div className="task-actions">
-              <button
-                className="text-button"
-                type="button"
-                onClick={() => abortRef.current?.abort()}
-              >
-                暂停任务
-              </button>
-            </div>
-          ) : (
-            <div className="task-actions">
-              <button
-                className="primary-button"
-                type="button"
-                disabled={!sourceCues.length}
-                onClick={() => void translate()}
-              >
-                <span>
-                  {translatedCount > 0 && translatedCount < tidy.length
-                    ? `继续任务 · 剩余 ${tidy.length - translatedCount} 条`
-                    : status === "error"
-                      ? "继续任务"
-                      : "开始制作双语字幕"}
-                </span>
-                <b>→</b>
-              </button>
-              {status === "error" && sourceCues.length > 0 && (
-                <button
-                  className="restart-button"
-                  type="button"
-                  onClick={() => void translate(true)}
-                >
-                  重新开始
-                </button>
+              {sourceCues.length ? (
+                <>
+                  <strong title={sourceName}>{sourceName}</strong>
+                  <div className="file-meta">
+                    <span>{sourceCues.length} 条 · {formatDuration(subtitleDuration(sourceCues))}</span>
+                    <button className="text-button" type="button" disabled={status === "translating"} onClick={() => fileInputRef.current?.click()}>更换</button>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <button className="secondary-button" type="button" onClick={() => fileInputRef.current?.click()}>选择 SRT 文件</button>
+                  <span>或拖到这里 · 最大 4 MB</span>
+                </>
               )}
             </div>
-          )}
+            {!sourceCues.length && <button className="text-button demo-button" type="button" onClick={() => void loadText(SAMPLE_SRT, "演示字幕.srt")}>试用演示字幕</button>}
+          </section>
 
-          {message && (
-            <p
-              className={`status-message ${status === "error" ? "error" : ""}`}
-              role={status === "error" ? "alert" : "status"}
-            >
-              {message}
-            </p>
-          )}
-        </div>
-      </section>
+          <section className="control-section settings-panel">
+            <h2>字幕设置</h2>
+            <fieldset disabled={status === "translating"}>
+              <label className="field" htmlFor="editor">
+                <span>导入平台</span>
+                <select id="editor" aria-label="最终导入平台" value={editor} onChange={(event) => setEditor(event.target.value)}>
+                  {Object.entries(EDITOR_PROFILES).map(([value, item]) => <option key={value} value={value}>{item.label}</option>)}
+                </select>
+              </label>
+              <div className="two-columns">
+                <label className="field" htmlFor="frame">
+                  <span>画幅</span>
+                  <select id="frame" aria-label="视频画幅" value={frame} onChange={(event) => { setFrame(event.target.value); resetOutput(); }}>
+                    <option value="landscape">横屏 16:9</option>
+                    <option value="portrait">竖屏 9:16</option>
+                  </select>
+                </label>
+                <label className="field" htmlFor="order">
+                  <span>双语顺序</span>
+                  <select id="order" value={order} onChange={(event) => setOrder(event.target.value as Order)}>
+                    <option value="chinese-first">中文在上</option>
+                    <option value="english-first">英文在上</option>
+                  </select>
+                </label>
+              </div>
+              <p className="rule-note">只拆分，不合并。句末另起一条，短句单行。</p>
 
-      {sourceCues.length > 0 && (
-        <section className="preview-section">
+              <details className="advanced-settings">
+                <summary>高级设置</summary>
+                <div className="details-content">
+                  <label className="control-label" htmlFor="max-chars">
+                    每条英文长度 <output htmlFor="max-chars">{maxChars}</output>
+                  </label>
+                  <input id="max-chars" className="range" type="range" min="48" max="84" step="6" value={maxChars} onChange={(event) => { setMaxChars(Number(event.target.value)); resetOutput(); }} />
+                  <span className="field-hint">每行英文约 {profile.englishLineChars} 字符，中文约 {profile.chineseLineChars} 字</span>
+                  <div className="mode-options" role="group" aria-label="长句处理方式">
+                    <label><input type="radio" name="mode" value="new-cue" checked={mode === "new-cue"} onChange={() => { setMode("new-cue"); resetOutput(); }} />超长句拆成新条目</label>
+                    <label><input type="radio" name="mode" value="line-break" checked={mode === "line-break"} onChange={() => { setMode("line-break"); resetOutput(); }} />超长句仅换行</label>
+                  </div>
+                  <label className="field" htmlFor="model">
+                    <span>翻译模型</span>
+                    <select id="model" value={model} onChange={(event) => setModel(event.target.value)}>
+                      <option value="deepseek-v4-flash">V4 Flash · 快速</option>
+                      <option value="deepseek-v4-pro">V4 Pro · 质量优先</option>
+                    </select>
+                  </label>
+                  <label className="field" htmlFor="time-offset">
+                    <span>导出整体时间偏移（秒）</span>
+                    <input id="time-offset" type="number" step="0.001" min="-36000" max="36000" value={timeOffsetSeconds} onChange={(event) => setTimeOffsetSeconds(Number(event.target.value) || 0)} />
+                  </label>
+                  <span className="field-hint">默认 0，仅在视频时间线需要偏移时调整。</span>
+                </div>
+              </details>
+            </fieldset>
+            {prepared.error && <p className="status-message error" role="alert">{prepared.error}</p>}
+          </section>
+
+          <section className="control-section translate-panel">
+            <div className="section-heading">
+              <h2>翻译</h2>
+              <a href="https://platform.deepseek.com/api_keys" target="_blank" rel="noreferrer">获取 Key</a>
+            </div>
+            <fieldset disabled={status === "translating"}>
+              <label className="field" htmlFor="api-key">
+                <span>DeepSeek API Key</span>
+                <input id="api-key" type="password" autoComplete="off" spellCheck="false" value={apiKey} placeholder="sk-…" onChange={(event) => setApiKey(event.target.value)} />
+              </label>
+            </fieldset>
+            {sourceCues.length > 0 && (
+              <div className={`progress-box ${status}`} aria-live="polite">
+                <div className="progress-heading"><span>{progressLabel}</span><span>已完成 {translatedCount}/{tidy.length}</span></div>
+                <div className="progress-track" role="progressbar" aria-label="双语字幕制作进度" aria-valuemin={0} aria-valuemax={100} aria-valuenow={progress}>
+                  <i style={{ width: `${progress}%` }} />
+                </div>
+              </div>
+            )}
+            {(status !== "done" || translatedCount !== tidy.length) && <div className="task-actions">
+              {status === "translating" ? (
+                <button className="secondary-button" type="button" onClick={() => abortRef.current?.abort()}>暂停任务</button>
+              ) : (
+                <>
+                  <button className="primary-button" type="button" disabled={!tidy.length || translatedCount === tidy.length} onClick={() => void translate()}>
+                    {translatedCount > 0 && translatedCount < tidy.length
+                      ? `继续任务 · ${tidy.length - translatedCount} 条`
+                      : status === "error" ? "继续任务" : translatedCount && translatedCount === tidy.length ? "翻译完成" : "开始翻译"}
+                  </button>
+                  {status === "error" && sourceCues.length > 0 && <button className="secondary-button" type="button" onClick={() => void translate(true)}>重新开始</button>}
+                </>
+              )}
+            </div>}
+            {message && (status !== "done" || overlongCount > 0) && <p className={`status-message ${status === "error" ? "error" : ""}`} role={status === "error" ? "alert" : "status"}>{message}</p>}
+          </section>
+
+          <details className="platform-help">
+            <summary>导入 {editor === "resolve" ? "达芬奇" : editor === "premiere" ? "PR" : "剪辑软件"} 的方法</summary>
+            <div className="details-content">
+              <p>{profile.importHelp}</p>
+              <p>{profile.styleHelp}</p>
+              <p>字体、字号和位置在剪辑软件内设置。</p>
+              <a href={profile.sourceUrl} target="_blank" rel="noreferrer">导入说明</a>{" · "}<a href={profile.styleSourceUrl} target="_blank" rel="noreferrer">样式说明</a>
+            </div>
+          </details>
+        </aside>
+
+        <section className="preview-section" aria-label="字幕预览与下载">
           <div className="preview-heading">
             <div>
-              <span className="section-kicker">实时预览</span>
-              <h2>字幕会这样呈现</h2>
-              <p className="preview-summary">全部显示 · 共 {tidy.length} 条</p>
+              <h2>字幕预览</h2>
+              <p className="preview-summary">{sourceCues.length ? `${sourceCues.length} 条原字幕 → ${tidy.length} 条` : "导入后可校对、翻译和下载"}{qualityWarningCount > 0 && ` · ${qualityWarningCount} 条需检查`}</p>
             </div>
             <div className="preview-actions">
-              <button
-                className="secondary-button"
-                type="button"
-                onClick={() => download(false)}
-              >
-                下载已整理英文
-              </button>
-              <button
-                className="download-button"
-                type="button"
-                disabled={translatedCount !== tidy.length}
-                onClick={() => download(true)}
-              >
-                下载中英双语 SRT
-                <span>↓</span>
-              </button>
+              <button className="secondary-button" type="button" disabled={!tidy.length} onClick={() => download(false)}>下载英文</button>
+              <button className="download-button" type="button" disabled={!tidy.length || translatedCount !== tidy.length} onClick={() => download(true)}>下载双语 SRT</button>
             </div>
           </div>
 
-          <div className="subtitle-list">
-            {tidy.map((cue, index) => (
-              <article className="subtitle-row" key={cue.id}>
-                <div className="cue-number">{String(index + 1).padStart(2, "0")}</div>
-                <time>
-                  {formatTimestamp(cue.startMs)}
-                  <span>→</span>
-                  {formatTimestamp(cue.endMs)}
-                </time>
-                <div className={`subtitle-copy ${order}`}>
-                  {order === "chinese-first" && (
-                    <textarea
-                      aria-label={`第 ${index + 1} 条中文字幕`}
-                      value={translations[cue.id] || ""}
-                      onChange={(event) =>
-                        updateTranslation(cue.id, event.target.value)
-                      }
-                      placeholder={
-                        status === "done" ? "点击修改译文" : "翻译后显示中文"
-                      }
-                      rows={1}
-                    />
-                  )}
-                  <p>{cue.text}</p>
-                  {order === "english-first" && (
-                    <textarea
-                      aria-label={`第 ${index + 1} 条中文字幕`}
-                      value={translations[cue.id] || ""}
-                      onChange={(event) =>
-                        updateTranslation(cue.id, event.target.value)
-                      }
-                      placeholder={
-                        status === "done" ? "点击修改译文" : "翻译后显示中文"
-                      }
-                      rows={1}
-                    />
-                  )}
+          {previewCue ? (
+            <>
+              <details className="output-preview">
+                <summary>画面预览<span>第 {activePreviewIndex + 1} 条</span></summary>
+                <div className={`preview-screen ${frame}`}>
+                  <div className={`screen-subtitles ${order}`}>
+                    {translations[previewCue.id]?.trim() && <p className="screen-chinese">{wrapChineseSubtitle(translations[previewCue.id], profile.chineseLineChars)}</p>}
+                    <p className="screen-english">{previewCue.text}</p>
+                  </div>
                 </div>
-              </article>
-            ))}
-          </div>
+                <div className="preview-navigation">
+                  <button className="text-button" type="button" disabled={activePreviewIndex === 0} onClick={() => setPreviewIndex(activePreviewIndex - 1)}>上一条</button>
+                  <span>{activePreviewIndex + 1} / {tidy.length}</span>
+                  <button className="text-button" type="button" disabled={activePreviewIndex === tidy.length - 1} onClick={() => setPreviewIndex(activePreviewIndex + 1)}>下一条</button>
+                </div>
+                <p className="field-hint preview-hint">排版模拟，最终显示以剪辑软件内的样式为准。</p>
+              </details>
+              <div className="subtitle-list">
+                {tidy.map((cue, index) => (
+                  <article className="subtitle-row" key={cue.id}>
+                    <button className="cue-number text-button" type="button" aria-label={`预览第 ${index + 1} 条字幕`} aria-pressed={activePreviewIndex === index} onClick={() => setPreviewIndex(index)}>{String(index + 1).padStart(2, "0")}</button>
+                    <time>{formatTimestamp(cue.startMs + timeOffsetSeconds * 1000)}<span>→</span>{formatTimestamp(cue.endMs + timeOffsetSeconds * 1000)}</time>
+                    <div className={`subtitle-copy ${order}`}>
+                      <textarea
+                        aria-label={`第 ${index + 1} 条中文字幕`}
+                        value={translations[cue.id] || ""}
+                        onChange={(event) => updateTranslation(cue.id, event.target.value)}
+                        placeholder={status === "done" ? "编辑译文" : "中文译文"}
+                        rows={Math.max(1, wrapChineseSubtitle(translations[cue.id] || "", profile.chineseLineChars).split("\n").length)}
+                      />
+                      <p>{cue.text}</p>
+                    </div>
+                    {cueWarnings[cue.id]?.length > 0 && <details className="cue-quality"><summary>需检查</summary><p>{cueWarnings[cue.id].join(" · ")}</p></details>}
+                  </article>
+                ))}
+              </div>
+            </>
+          ) : (
+            <div className="empty-preview"><p>先导入英文字幕</p><span>支持 Buzz 导出的 SRT 文件</span></div>
+          )}
         </section>
-      )}
-
-      <footer>
-        <span>双语字幕工坊</span>
-        <p>本工具不保存字幕内容或 API Key。翻译请求由 DeepSeek 处理。</p>
-      </footer>
+      </div>
+      <footer>字幕和 API Key 不保存；翻译由 DeepSeek 处理。</footer>
     </main>
   );
 }

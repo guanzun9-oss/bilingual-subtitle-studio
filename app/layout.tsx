@@ -19,14 +19,14 @@ export async function generateMetadata(): Promise<Metadata> {
       "无需安装或登录，上传英文 SRT，用 DeepSeek 生成自然对齐的中英双语字幕。",
     openGraph: {
       title: "双语字幕工坊",
-      description: "语义合并、自动重试，让中英文自然对齐。",
+      description: "保留原字幕边界、句末拆分、自动重试，让中英文自然对齐。",
       type: "website",
       images: [{ url: imageUrl, width: 1792, height: 909 }],
     },
     twitter: {
       card: "summary_large_image",
       title: "双语字幕工坊",
-      description: "语义合并、自动重试，让中英文自然对齐。",
+      description: "保留原字幕边界、句末拆分、自动重试，让中英文自然对齐。",
       images: [imageUrl],
     },
   };
