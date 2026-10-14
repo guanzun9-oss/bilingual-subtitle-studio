@@ -98,7 +98,8 @@ Buzz 导出的英文 SRT 经常按照识别时间切成很短的片段。直接�
 ```bash
 git clone https://github.com/guanzun9-oss/bilingual-subtitle-studio.git
 cd bilingual-subtitle-studio
-npm install
+npm ci
+npm run setup:git
 npm run dev
 ```
 
@@ -107,12 +108,14 @@ npm run dev
 ### 测试与构建
 
 ```bash
-npm run lint
-npm test
+npm run check
 ```
 
 技术栈：React 19、Next.js 16 / vinext、TypeScript、Cloudflare Workers 和
 DeepSeek Chat Completions API。
+
+开发分支、提交检查、PR 和依赖更新约定见 [CONTRIBUTING.md](./CONTRIBUTING.md)，
+版本发布与回滚见 [发布流程](./docs/releasing.md)。
 
 </details>
 

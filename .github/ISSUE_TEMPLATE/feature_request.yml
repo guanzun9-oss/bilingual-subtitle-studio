@@ -1,0 +1,15 @@
+name: 改进建议
+description: 描述你希望改善的使用场景
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: 使用场景和问题
+      description: 你正在完成什么任务，当前哪里不方便？
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: 建议的行为
+      description: 描述期望效果和可接受的替代方案。

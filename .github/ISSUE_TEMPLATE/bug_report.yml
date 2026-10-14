@@ -1,0 +1,20 @@
+name: 问题反馈
+description: 报告字幕处理、翻译、导出或界面问题
+body:
+  - type: markdown
+    attributes:
+      value: 请勿提交 API Key 或私人字幕。安全漏洞请按照 SECURITY.md 私下报告。
+  - type: input
+    id: environment
+    attributes:
+      label: 版本和环境
+      placeholder: 例如 v0.4.0、macOS、Chrome、Premiere Pro
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: 复现步骤
+      description: 描述操作、实际结果和预期结果，可附脱敏后的最小 SRT 样例。
+    validations:
+      required: true

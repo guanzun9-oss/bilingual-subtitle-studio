@@ -42,3 +42,9 @@ next-env.d.ts
 /.wrangler/
 /outputs/
 /work/
+
+# local scratch files and tool caches
+/tmp/
+/build/
+/.openai/
+*.log
