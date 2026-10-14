@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- 修复生产依赖安全告警：升级 Next.js / React，刷新受影响传递依赖，并修补服务端组件、图片解析和旧构建依赖
+- 更新兼容版本的 Cloudflare / Vite 工具链；完整检查加入生产依赖安全审计，并补充翻译接口的生产 Worker 运行测试
 - 统一 npm、Node.js、编辑器和 Git 换行配置，排除临时文件与构建产物
 - 增加本地提交/推送检查、GitHub CI、PR 与问题模板、维护者规则及 Dependabot 更新
 - 补充开发、版本发布、安全报告与回滚流程；版本标签经过完整检查后创建 GitHub Release
