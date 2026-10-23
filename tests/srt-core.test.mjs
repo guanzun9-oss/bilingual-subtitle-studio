@@ -342,3 +342,18 @@ Yes. Yes. No.`);
   const lineBreak = tidyCues(cues, { mode: "line-break" });
   assert.deepEqual(lineBreak.map((cue) => cue.key), prepared.map((cue) => cue.key));
 });
+
+test("cues stay separate when the blank line holds spaces or is missing", () => {
+  const withSpaces = "1\n00:00:01,000 --> 00:00:02,000\nFirst.\n \n2\n00:00:03,000 --> 00:00:04,000\nSecond.\n\t\n3\n00:00:05,000 --> 00:00:06,000\nThird.\n";
+  assert.deepEqual(parseSrt(withSpaces).map((cue) => cue.text), ["First.", "Second.", "Third."]);
+
+  const noBlank = "1\n00:00:01,000 --> 00:00:02,000\nFirst line\nsecond line.\n2\n00:00:03,000 --> 00:00:04,000\nSecond.\n";
+  const cues = parseSrt(noBlank);
+  assert.deepEqual(cues.map((cue) => cue.text), ["First line second line.", "Second."]);
+  assert.deepEqual(cues.map((cue) => [cue.startMs, cue.endMs]), [[1000, 2000], [3000, 4000]]);
+});
+
+test("a number spoken in the subtitle text is kept", () => {
+  const cues = parseSrt("1\n00:00:01,000 --> 00:00:02,000\nHow many?\n42\n\n2\n00:00:03,000 --> 00:00:04,000\nThat many.\n");
+  assert.deepEqual(cues.map((cue) => cue.text), ["How many? 42", "That many."]);
+});
