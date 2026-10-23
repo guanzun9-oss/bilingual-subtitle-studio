@@ -330,3 +330,15 @@ Short one.`);
   assert.notEqual(landscape[0].key, landscape.at(-1).key);
   assert.equal(landscape[0].text, landscape.at(-1).text);
 });
+
+test("repeated identical sentences in one cue keep separate keys", () => {
+  const cues = parseSrt(`1
+00:00:01,000 --> 00:00:03,000
+Yes. Yes. No.`);
+  const prepared = tidyCues(cues);
+  assert.deepEqual(prepared.map((cue) => cue.text), ["Yes.", "Yes.", "No."]);
+  assert.equal(new Set(prepared.map((cue) => cue.key)).size, 3);
+  // The occurrence count is stable when settings re-split the cue.
+  const lineBreak = tidyCues(cues, { mode: "line-break" });
+  assert.deepEqual(lineBreak.map((cue) => cue.key), prepared.map((cue) => cue.key));
+});
