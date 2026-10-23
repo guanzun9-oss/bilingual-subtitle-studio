@@ -7,6 +7,8 @@ import { Miniflare, convertV4MiniflareOptions } from "miniflare";
 
 // Run the production bundle in workerd, the runtime Cloudflare uses, so
 // Workers-only imports such as `cloudflare:workers` resolve as they do live.
+// Miniflare comes with the Cloudflare tooling rather than as its own pinned
+// dependency, so the test runtime moves with wrangler and the Vite plugin.
 const serverDir = new URL("../dist/server/", import.meta.url);
 let worker;
 let workerPromise;
