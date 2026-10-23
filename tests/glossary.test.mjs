@@ -18,6 +18,10 @@ test("skips blank, malformed, repeated, and overlong lines", () => {
   assert.deepEqual(parseGlossary(undefined), []);
 });
 
+test("a side that is only whitespace skips the line instead of producing an empty term", () => {
+  assert.deepEqual(parseGlossary(" = 译名\nName =  \n\t→ 词\nOk = 好"), [["Ok", "好"]]);
+});
+
 test(`keeps at most ${MAX_GLOSSARY_ENTRIES} entries`, () => {
   const text = Array.from({ length: MAX_GLOSSARY_ENTRIES + 5 }, (_, index) => `Term${index} = 词${index}`).join("\n");
   assert.equal(parseGlossary(text).length, MAX_GLOSSARY_ENTRIES);
@@ -27,4 +31,14 @@ test("sends only the terms that occur in the batch, ignoring case", () => {
   const entries = [["Zane", "赞恩"], ["Kubernetes", "Kubernetes"], ["Mars", "火星"]];
   assert.deepEqual(glossaryFor(entries, ["zane said hi.", "We use KUBERNETES."]), [["Zane", "赞恩"], ["Kubernetes", "Kubernetes"]]);
   assert.deepEqual(glossaryFor(entries, ["Nothing here."]), []);
+});
+
+test("matches whole terms, with plural and possessive endings", () => {
+  const entries = [["Ann", "安"], ["Mars", "火星"], ["robot", "机器人"], ["C++", "C++"], ["New York", "纽约"]];
+  assert.deepEqual(glossaryFor(entries, ["We cannot go to Marshall."]), []);
+  assert.deepEqual(
+    glossaryFor(entries, ["Ann's robots love C++ in new york."]).map(([source]) => source),
+    ["Ann", "robot", "C++", "New York"],
+  );
+  assert.deepEqual(glossaryFor(entries, ["Mars."]), [["Mars", "火星"]]);
 });
