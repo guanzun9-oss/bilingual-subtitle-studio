@@ -12,7 +12,7 @@ import {
   wrapChineseSubtitle,
 } from "@/lib/srt-core.mjs";
 import { parseGlossary } from "@/lib/glossary.mjs";
-import { EDITOR_PROFILES, getSubtitleProfile } from "@/lib/subtitle-profiles.mjs";
+import { EDITOR_PROFILES, exportFileName, getSubtitleProfile } from "@/lib/subtitle-profiles.mjs";
 import {
   fingerprint,
   listSessions,
@@ -82,10 +82,6 @@ function formatDuration(ms: number) {
   const minutes = Math.floor(totalSeconds / 60);
   const seconds = totalSeconds % 60;
   return `${minutes}:${String(seconds).padStart(2, "0")}`;
-}
-
-function sanitizeFileName(name: string) {
-  return name.replace(/\.srt$/i, "").replace(/[\\/:*?"<>|]/g, "-");
 }
 
 function maxChineseChars(cue: Cue, lineChars = 16) {
@@ -488,9 +484,7 @@ export default function SubtitleTool() {
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement("a");
     anchor.href = url;
-    anchor.download = `${sanitizeFileName(sourceName || "subtitle")}.${
-      bilingual ? "中英双语" : "已整理英文"
-    }.${profile.suffix}.srt`;
+    anchor.download = exportFileName(sourceName, bilingual, profile.suffix);
     anchor.click();
     // Safari can cancel the download if the URL is revoked in the same task.
     setTimeout(() => URL.revokeObjectURL(url), 1_000);

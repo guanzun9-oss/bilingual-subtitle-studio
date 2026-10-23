@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { EDITOR_PROFILES, getSubtitleProfile } from "../lib/subtitle-profiles.mjs";
+import { EDITOR_PROFILES, exportFileName, getSubtitleProfile } from "../lib/subtitle-profiles.mjs";
 import { getSubtitleWarnings, parseSrt, serializeSrt, tidyCues, wrapChineseSubtitle } from "../lib/srt-core.mjs";
 
 const source = parseSrt(`1
@@ -56,4 +56,12 @@ test("profile quality checks use the selected width and do not block exports", (
   assert.ok(getSubtitleWarnings(cue, "", profile).includes("英文单行超过 32 字符"));
   assert.ok(serializeSrt([cue], {}, { ...profile, bilingual: false }).includes(cue.text));
   assert.equal(getSubtitleProfile("unknown").editor, "generic");
+});
+
+test("export file names name the editor once and never repeat .srt", () => {
+  assert.equal(exportFileName("Film.SRT", true, getSubtitleProfile("resolve").suffix), "Film.中英双语.resolve.srt");
+  assert.equal(exportFileName("Film.srt", false, getSubtitleProfile("premiere").suffix), "Film.已整理英文.premiere.srt");
+  assert.equal(exportFileName("Film.srt", true, getSubtitleProfile("generic").suffix), "Film.中英双语.srt");
+  assert.equal(exportFileName("a/b:c?.srt", true, ""), "a-b-c-.中英双语.srt");
+  assert.equal(exportFileName("", true, ""), "subtitle.中英双语.srt");
 });
