@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
+import { memo, useCallback, useMemo, useRef, useState } from "react";
 import {
   formatTimestamp,
   getSubtitleWarnings,
@@ -54,6 +54,54 @@ function maxChineseChars(cue: Cue, lineChars = 16) {
   );
 }
 
+type SubtitleRowProps = {
+  cue: Cue;
+  index: number;
+  translation: string;
+  /** Joined so unchanged rows compare equal and skip re-rendering. */
+  warnings: string;
+  active: boolean;
+  order: Order;
+  timeOffsetMs: number;
+  chineseLineChars: number;
+  placeholder: string;
+  onEdit: (key: string, value: string) => void;
+  onSelect: (index: number) => void;
+};
+
+// Long films produce thousands of rows; typing in one must not re-render the rest.
+const SubtitleRow = memo(function SubtitleRow({
+  cue,
+  index,
+  translation,
+  warnings,
+  active,
+  order,
+  timeOffsetMs,
+  chineseLineChars,
+  placeholder,
+  onEdit,
+  onSelect,
+}: SubtitleRowProps) {
+  return (
+    <article className="subtitle-row">
+      <button className="cue-number text-button" type="button" aria-label={`预览第 ${index + 1} 条字幕`} aria-pressed={active} onClick={() => onSelect(index)}>{String(index + 1).padStart(2, "0")}</button>
+      <time>{formatTimestamp(cue.startMs + timeOffsetMs)}<span>→</span>{formatTimestamp(cue.endMs + timeOffsetMs)}</time>
+      <div className={`subtitle-copy ${order}`}>
+        <textarea
+          aria-label={`第 ${index + 1} 条中文字幕`}
+          value={translation}
+          onChange={(event) => onEdit(cue.key, event.target.value)}
+          placeholder={placeholder}
+          rows={Math.max(1, wrapChineseSubtitle(translation, chineseLineChars).split("\n").length)}
+        />
+        <p>{cue.text}</p>
+      </div>
+      {warnings && <details className="cue-quality"><summary>需检查</summary><p>{warnings}</p></details>}
+    </article>
+  );
+});
+
 export default function SubtitleTool() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const abortRef = useRef<AbortController | null>(null);
@@ -101,10 +149,13 @@ export default function SubtitleTool() {
   const activePreviewIndex = Math.min(previewIndex, Math.max(0, tidy.length - 1));
   const previewCue = tidy[activePreviewIndex];
   const cueWarnings = useMemo(
-    () => Object.fromEntries(tidy.map((cue) => [cue.id, getSubtitleWarnings(cue, translations[cue.id] || "", profile)])),
+    () => Object.fromEntries(tidy.map((cue) => [
+      cue.id,
+      getSubtitleWarnings(cue, translations[cue.id] || "", profile).join(" · "),
+    ])) as Record<string, string>,
     [tidy, translations, profile],
   );
-  const qualityWarningCount = Object.values(cueWarnings).filter((warnings) => warnings.length > 0).length;
+  const qualityWarningCount = Object.values(cueWarnings).filter(Boolean).length;
 
   const translatedCount = useMemo(
     () => tidy.filter((cue) => translations[cue.id]?.trim()).length,
@@ -282,9 +333,9 @@ export default function SubtitleTool() {
     }
   }
 
-  function updateTranslation(key: string, value: string) {
+  const updateTranslation = useCallback((key: string, value: string) => {
     setTranslationsByKey((current) => ({ ...current, [key]: value }));
-  }
+  }, []);
 
   function download(bilingual = true) {
     if (!tidy.length) return;
@@ -505,21 +556,20 @@ export default function SubtitleTool() {
               </details>
               <div className="subtitle-list">
                 {tidy.map((cue, index) => (
-                  <article className="subtitle-row" key={cue.id}>
-                    <button className="cue-number text-button" type="button" aria-label={`预览第 ${index + 1} 条字幕`} aria-pressed={activePreviewIndex === index} onClick={() => setPreviewIndex(index)}>{String(index + 1).padStart(2, "0")}</button>
-                    <time>{formatTimestamp(cue.startMs + timeOffsetSeconds * 1000)}<span>→</span>{formatTimestamp(cue.endMs + timeOffsetSeconds * 1000)}</time>
-                    <div className={`subtitle-copy ${order}`}>
-                      <textarea
-                        aria-label={`第 ${index + 1} 条中文字幕`}
-                        value={translations[cue.id] || ""}
-                        onChange={(event) => updateTranslation(cue.key, event.target.value)}
-                        placeholder={status === "done" ? "编辑译文" : "中文译文"}
-                        rows={Math.max(1, wrapChineseSubtitle(translations[cue.id] || "", profile.chineseLineChars).split("\n").length)}
-                      />
-                      <p>{cue.text}</p>
-                    </div>
-                    {cueWarnings[cue.id]?.length > 0 && <details className="cue-quality"><summary>需检查</summary><p>{cueWarnings[cue.id].join(" · ")}</p></details>}
-                  </article>
+                  <SubtitleRow
+                    key={cue.id}
+                    cue={cue}
+                    index={index}
+                    translation={translations[cue.id] || ""}
+                    warnings={cueWarnings[cue.id]}
+                    active={activePreviewIndex === index}
+                    order={order}
+                    timeOffsetMs={timeOffsetSeconds * 1000}
+                    chineseLineChars={profile.chineseLineChars}
+                    placeholder={status === "done" ? "编辑译文" : "中文译文"}
+                    onEdit={updateTranslation}
+                    onSelect={setPreviewIndex}
+                  />
                 ))}
               </div>
             </>
