@@ -483,7 +483,8 @@ export default function SubtitleTool() {
       bilingual ? "中英双语" : "已整理英文"
     }.${profile.suffix}.srt`;
     anchor.click();
-    URL.revokeObjectURL(url);
+    // Safari can cancel the download if the URL is revoked in the same task.
+    setTimeout(() => URL.revokeObjectURL(url), 1_000);
     if (bilingual && overlongCount) {
       setStatus("done");
       setMessage(`已导出；其中 ${overlongCount} 条偏长，建议播放时重点检查。`);
@@ -649,7 +650,7 @@ export default function SubtitleTool() {
           </section>
 
           <details className="platform-help">
-            <summary>导入 {editor === "resolve" ? "达芬奇" : editor === "premiere" ? "PR" : "剪辑软件"} 的方法</summary>
+            <summary>{editor === "resolve" ? "导入达芬奇的方法" : editor === "premiere" ? "导入 PR 的方法" : "导入剪辑软件的方法"}</summary>
             <div className="details-content">
               <p>{profile.importHelp}</p>
               <p>{profile.styleHelp}</p>
