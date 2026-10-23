@@ -1,8 +1,18 @@
 # 依赖安全基线
 
+## 2026-10-23 更新
+
+Node.js 22.23.4 / npm 10.9.9。`npm audit --omit=dev` 仍为 **0**。
+
+- 移除未使用的 D1 / Drizzle 模板代码及 `drizzle-orm`、`drizzle-kit`；原 `@esbuild-kit/core-utils` 覆盖随之删除。
+- vinext 升级到 1.x 后不再依赖 image-size，原覆盖删除；Worker 也不再提供图片优化接口。
+- 完整 `npm audit` 为 8 high（下述 braces 链）和 3 moderate：fflate 0.7.x 的 ZIP64 解析问题（[GHSA-px8p-9vwx-vf98](https://github.com/advisories/GHSA-px8p-9vwx-vf98)），经 vinext → @vercel/og → satori 引入，只用于动态生成 OG 图片；本应用不使用该功能，也不解析用户提供的 ZIP。修复需降级 vinext，暂不处理。
+
+## 2026-10-15 基线
+
 核查时间：2026-10-15（上海时区），Node.js 22.23.3 / npm 10.9.4。
 
-## 已修复
+### 已修复
 
 原生产依赖图有 6 个受影响包（1 critical、4 high、1 moderate）。升级并重新生成锁文件后，`npm audit --omit=dev` 的各级别告警均为 **0**。
 
@@ -25,7 +35,7 @@ React 服务端组件升级到 19.2.8，处理原生产分类检查未包含的�
 
 `npm run check` 和 GitHub 的 quality 检查现在包含生产依赖审计，中危及以上告警将阻止检查通过。实际运行测试覆盖生产 Worker 的页面、输入校验、译文返回、凭据错误和禁用缓存，翻译服务使用模拟响应。
 
-## 上游仍未提供补丁的开发依赖
+### 上游仍未提供补丁的开发依赖
 
 完整 `npm audit` 从 32 个受影响包降至 8 个 high、0 critical、0 moderate、0 low。剩余 8 个均来自 **同一条 braces 3.0.3 公告**，包含依赖传播的计数：braces、micromatch、fast-glob、@next/eslint-plugin-next、eslint-config-next、vite-plugin-dynamic-import、vite-plugin-commonjs、vinext。
 

@@ -28,11 +28,9 @@
     "check": "npm run lint && npm run typecheck && npm test && npm run audit:production",
     "audit:production": "npm audit --omit=dev --audit-level=moderate",
     "setup:git": "node scripts/setup-git.mjs",
-    "release:check": "node scripts/release-notes.mjs",
-    "db:generate": "drizzle-kit generate"
+    "release:check": "node scripts/release-notes.mjs"
   },
   "dependencies": {
-    "drizzle-orm": "0.45.4",
     "next": "16.4.2",
     "react": "19.3.1",
     "react-dom": "19.3.1"
@@ -45,7 +43,6 @@
     "@types/react-dom": "19.3.0",
     "@vitejs/plugin-react": "6.1.2",
     "@vitejs/plugin-rsc": "0.5.38",
-    "drizzle-kit": "0.31.11",
     "eslint": "10.13.0",
     "eslint-config-next": "16.4.2",
     "react-server-dom-webpack": "19.3.1",
@@ -55,13 +52,5 @@
     "vite": "8.3.4",
     "wrangler": "4.151.2"
   },
-  "type": "module",
-  "overrides": {
-    "vinext": {
-      "image-size": "2.0.4"
-    },
-    "@esbuild-kit/core-utils": {
-      "esbuild": "0.25.12"
-    }
-  }
+  "type": "module"
 }
