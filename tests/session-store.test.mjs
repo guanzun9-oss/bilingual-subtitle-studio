@@ -94,6 +94,12 @@ test("unavailable or corrupted storage never throws", () => {
   corrupted.setItem("subtitle-studio:session:a", "[]");
   assert.deepEqual(listSessions(corrupted), []);
   assert.equal(loadSession(corrupted, "a"), null);
+  for (const translations of [null, ["译文"], { a: 1 }, { a: null }]) {
+    corrupted.setItem("subtitle-studio:session:b", JSON.stringify({ id: "b", name: "b", translations }));
+    assert.equal(loadSession(corrupted, "b"), null, JSON.stringify(translations));
+  }
+  corrupted.setItem("subtitle-studio:session:c", JSON.stringify({ id: "c", translations: {}, sourceText: 42 }));
+  assert.equal(loadSession(corrupted, "c"), null);
 });
 
 test("removing a session deletes its data and index entry", () => {

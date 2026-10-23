@@ -168,19 +168,19 @@ export default function SubtitleTool() {
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [lastSession, setLastSession] = useState<SavedSession | null>(null);
   const sourceTextRef = useRef("");
-  const storageReady = useRef(false);
+  // State rather than a ref: effects replayed by Strict Mode still see the
+  // first render's `false`, so they cannot save defaults over stored values.
+  const [storageLoaded, setStorageLoaded] = useState(false);
 
-  // These save effects are declared before the restore effect below, so on
-  // first mount they skip and cannot overwrite saved values with defaults.
   useEffect(() => {
-    if (!storageReady.current) return;
+    if (!storageLoaded) return;
     savePrefs(browserStorage(), { editor, frame, order, model, maxChars, mode });
-  }, [editor, frame, order, model, maxChars, mode]);
+  }, [storageLoaded, editor, frame, order, model, maxChars, mode]);
 
   useEffect(() => {
-    if (!storageReady.current) return;
+    if (!storageLoaded) return;
     saveApiKey(browserStorage(), rememberKey ? apiKey.trim() : "");
-  }, [apiKey, rememberKey]);
+  }, [storageLoaded, apiKey, rememberKey]);
 
   useEffect(() => {
     if (!sessionId) return;
@@ -212,8 +212,8 @@ export default function SubtitleTool() {
       setRememberKey(true);
     }
     setLastSession(listSessions(storage)[0] ?? null);
+    setStorageLoaded(true);
     /* eslint-enable react-hooks/set-state-in-effect */
-    storageReady.current = true;
   }, []);
 
   const profile = useMemo(() => getSubtitleProfile(editor, frame), [editor, frame]);
