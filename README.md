@@ -1,6 +1,6 @@
 # 双语字幕工坊 · Bilingual Subtitle Studio
 
-![Version](https://img.shields.io/badge/version-0.4.0-2563eb)
+![Version](https://img.shields.io/badge/version-0.5.0-2563eb)
 
 ![双语字幕工坊 · Bilingual Subtitle Studio](./public/og-v2.png)
 
@@ -64,7 +64,7 @@ Buzz 导出的英文 SRT 经常按照识别时间切成很短的片段。直接�
 
 ## 当前版本
 
-当前版本 `v0.4.0`：只在原字幕内拆分，句末另起一条，短句保持单行；新增剪辑平台与横竖屏选择，并精简工作界面。
+当前版本 `v0.5.0`：同时翻译 3 批并支持人名与术语表；翻译进度自动保存在本机浏览器，刷新或改设置都不会丢失译文；长字幕编辑更流畅。
 完整记录见 [CHANGELOG.md](./CHANGELOG.md)。
 
 ## 质量与限制
