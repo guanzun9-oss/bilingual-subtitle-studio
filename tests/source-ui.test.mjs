@@ -22,14 +22,14 @@ test("preview renders every prepared subtitle", async () => {
   assert.doesNotMatch(source, /预览前 12 条/);
 });
 
-test("translation recovers malformed batches without losing progress", async () => {
+test("translation uses the tested batch queue and saves progress as it arrives", async () => {
   const source = await readFile(sourceUrl, "utf8");
 
-  assert.match(source, /batch\(pending,\s*12\)/);
-  assert.match(source, /async function translateBatch/);
-  assert.match(source, /remaining\.slice\(0, middle\)/);
-  assert.match(source, /remaining\.slice\(middle\)/);
-  assert.match(source, /onProgress\?\./);
+  // Batching, retries, splitting, and concurrency are covered in
+  // translation-queue.test.mjs; this checks the page actually uses them.
+  assert.match(source, /translateInBatches\(/);
+  assert.match(source, /onProgress:/);
+  assert.doesNotMatch(source, /for \(let index = 0; index < groups\.length/);
 });
 
 test("overlong translations are quality warnings, not failed work", async () => {
