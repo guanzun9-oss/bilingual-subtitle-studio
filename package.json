@@ -51,7 +51,7 @@
     "miniflare": "5.20261012.0-beta",
     "react-server-dom-webpack": "19.3.1",
     "tailwindcss": "4.3.3",
-    "typescript": "5.9.3",
+    "typescript": "7.0.2",
     "vinext": "1.1.0",
     "vite": "8.3.4",
     "wrangler": "4.151.0"
