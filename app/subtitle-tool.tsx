@@ -12,6 +12,7 @@ import {
   wrapChineseSubtitle,
 } from "@/lib/srt-core.mjs";
 import { EDITOR_PROFILES, getSubtitleProfile } from "@/lib/subtitle-profiles.mjs";
+import { translateInBatches } from "@/lib/translation-queue.mjs";
 
 type Cue = {
   id: string;
@@ -38,14 +39,6 @@ function formatDuration(ms: number) {
   const minutes = Math.floor(totalSeconds / 60);
   const seconds = totalSeconds % 60;
   return `${minutes}:${String(seconds).padStart(2, "0")}`;
-}
-
-function batch<T>(items: T[], size: number) {
-  const groups: T[][] = [];
-  for (let index = 0; index < items.length; index += size) {
-    groups.push(items.slice(index, index + size));
-  }
-  return groups;
 }
 
 function sanitizeFileName(name: string) {
@@ -172,94 +165,6 @@ export default function SubtitleTool() {
     await loadText(await file.text(), file.name);
   }
 
-  async function requestTranslationGroup(
-    initialGroup: Cue[],
-    controller: AbortController,
-    onProgress?: (translations: Record<string, string>) => void,
-  ) {
-    const completed: Record<string, string> = {};
-
-    async function translateBatch(group: Cue[]): Promise<void> {
-      let remaining = group.filter((cue) => !completed[cue.id]);
-      let lastMessage = "翻译失败，请稍后重试。";
-      let canSplit = false;
-
-      for (let attempt = 0; attempt < 2 && remaining.length; attempt += 1) {
-        try {
-          const response = await fetch("/api/translate", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            signal: controller.signal,
-            body: JSON.stringify({
-              apiKey: apiKey.trim(),
-              model,
-              items: remaining.map((cue) => ({
-                id: cue.id,
-                text: cue.text.replace(/\n/g, " "),
-                context: (cue.contextText || cue.text).replace(/\n/g, " "),
-                maxChineseChars: maxChineseChars(cue, profile.chineseLineChars),
-              })),
-            }),
-          });
-
-          let data: {
-            error?: string;
-            translations?: Record<string, string>;
-          } = {};
-          try {
-            data = (await response.json()) as typeof data;
-          } catch {
-            lastMessage = "服务器返回异常，正在自动缩小批次。";
-          }
-
-          if (data.translations && Object.keys(data.translations).length) {
-            Object.assign(completed, data.translations);
-            onProgress?.({ ...completed });
-          }
-          remaining = remaining.filter((cue) => !completed[cue.id]);
-          if (!remaining.length) return;
-
-          lastMessage = data.error || lastMessage;
-          if ([401, 403, 429].includes(response.status)) {
-            const terminalError = new Error(lastMessage) as Error & {
-              terminal?: boolean;
-            };
-            terminalError.terminal = true;
-            throw terminalError;
-          }
-          canSplit = response.status >= 500;
-        } catch (error) {
-          if (controller.signal.aborted) throw error;
-          if ((error as Error & { terminal?: boolean }).terminal) throw error;
-          lastMessage =
-            error instanceof Error && error.message
-              ? error.message
-              : "网络连接中断，正在自动重试。";
-        }
-
-        if (attempt < 1) {
-          await new Promise((resolve) => setTimeout(resolve, 900));
-        }
-      }
-
-      if (canSplit && remaining.length > 1) {
-        const middle = Math.ceil(remaining.length / 2);
-        await translateBatch(remaining.slice(0, middle));
-        await translateBatch(remaining.slice(middle));
-        return;
-      }
-
-      const error = new Error(lastMessage) as Error & {
-        partial?: Record<string, string>;
-      };
-      error.partial = completed;
-      throw error;
-    }
-
-    await translateBatch(initialGroup);
-    return completed;
-  }
-
   async function translate(restart = false) {
     if (!sourceCues.length) {
       setStatus("error");
@@ -300,31 +205,41 @@ export default function SubtitleTool() {
         return;
       }
 
-      const groups = batch(pending, 12);
-
-      for (let index = 0; index < groups.length; index += 1) {
-        try {
-          Object.assign(
-            nextTranslations,
-            await requestTranslationGroup(
-              groups[index],
-              controller,
-              (partial) => {
-                Object.assign(nextTranslations, partial);
-                setTranslations({ ...nextTranslations });
-              },
-            ),
-          );
-        } catch (error) {
-          const partial = (error as Error & {
-            partial?: Record<string, string>;
-          }).partial;
-          if (partial) Object.assign(nextTranslations, partial);
-          setTranslations({ ...nextTranslations });
-          throw error;
-        }
-        setTranslations({ ...nextTranslations });
-      }
+      const lineChars = profile.chineseLineChars;
+      await translateInBatches(
+        pending,
+        async (group: Cue[], signal: AbortSignal) => {
+          const response = await fetch("/api/translate", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            signal,
+            body: JSON.stringify({
+              apiKey: apiKey.trim(),
+              model,
+              items: group.map((cue) => ({
+                id: cue.id,
+                text: cue.text.replace(/\n/g, " "),
+                context: (cue.contextText || cue.text).replace(/\n/g, " "),
+                maxChineseChars: maxChineseChars(cue, lineChars),
+              })),
+            }),
+          });
+          let data = null;
+          try {
+            data = await response.json();
+          } catch {
+            // The queue treats an unreadable body as a failed batch.
+          }
+          return { status: response.status, data };
+        },
+        {
+          signal: controller.signal,
+          onProgress: (received: Record<string, string>) => {
+            Object.assign(nextTranslations, received);
+            setTranslations({ ...nextTranslations });
+          },
+        },
+      );
 
       const finalOverlongCount = tidy.filter(
         (cue) =>
