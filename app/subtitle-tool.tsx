@@ -1,6 +1,6 @@
 "use client";
 
-import { memo, useCallback, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   formatTimestamp,
   getSubtitleWarnings,
@@ -12,6 +12,17 @@ import {
   wrapChineseSubtitle,
 } from "@/lib/srt-core.mjs";
 import { EDITOR_PROFILES, getSubtitleProfile } from "@/lib/subtitle-profiles.mjs";
+import {
+  fingerprint,
+  listSessions,
+  loadApiKey,
+  loadPrefs,
+  loadSession,
+  removeSession,
+  saveApiKey,
+  savePrefs,
+  saveSession,
+} from "@/lib/session-store.mjs";
 import { translateInBatches } from "@/lib/translation-queue.mjs";
 
 type Cue = {
@@ -27,6 +38,34 @@ type Cue = {
 
 type Mode = "new-cue" | "line-break";
 type Order = "chinese-first" | "english-first";
+
+type SavedSession = {
+  id: string;
+  name: string;
+  savedAt: number;
+  translated: number;
+  hasSource: boolean;
+};
+
+const MODELS = ["deepseek-v4-flash", "deepseek-v4-pro"];
+
+/** localStorage, or undefined where the browser blocks it (e.g. some private modes). */
+function browserStorage() {
+  try {
+    return window.localStorage;
+  } catch {
+    return undefined;
+  }
+}
+
+function formatSavedAt(savedAt: number) {
+  return new Date(savedAt).toLocaleString("zh-CN", {
+    month: "numeric",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
 
 const SAMPLE_SRT = `1
 00:00:01,000 --> 00:00:08,600
@@ -124,6 +163,58 @@ export default function SubtitleTool() {
   >("idle");
   const [message, setMessage] = useState("");
   const [dragging, setDragging] = useState(false);
+  const [rememberKey, setRememberKey] = useState(false);
+  // Fingerprint of the loaded file; null for the demo, which is not saved.
+  const [sessionId, setSessionId] = useState<string | null>(null);
+  const [lastSession, setLastSession] = useState<SavedSession | null>(null);
+  const sourceTextRef = useRef("");
+  const storageReady = useRef(false);
+
+  // These save effects are declared before the restore effect below, so on
+  // first mount they skip and cannot overwrite saved values with defaults.
+  useEffect(() => {
+    if (!storageReady.current) return;
+    savePrefs(browserStorage(), { editor, frame, order, model, maxChars, mode });
+  }, [editor, frame, order, model, maxChars, mode]);
+
+  useEffect(() => {
+    if (!storageReady.current) return;
+    saveApiKey(browserStorage(), rememberKey ? apiKey.trim() : "");
+  }, [apiKey, rememberKey]);
+
+  useEffect(() => {
+    if (!sessionId) return;
+    const timer = setTimeout(() => {
+      saveSession(browserStorage(), {
+        id: sessionId,
+        name: sourceName,
+        sourceText: sourceTextRef.current,
+        translations: translationsByKey,
+      });
+    }, 500);
+    return () => clearTimeout(timer);
+  }, [sessionId, sourceName, translationsByKey]);
+
+  useEffect(() => {
+    // Restoring browser-only state has to wait until after hydration.
+    /* eslint-disable react-hooks/set-state-in-effect */
+    const storage = browserStorage();
+    const prefs = loadPrefs(storage);
+    if (Object.hasOwn(EDITOR_PROFILES, prefs.editor)) setEditor(prefs.editor);
+    if (prefs.frame === "landscape" || prefs.frame === "portrait") setFrame(prefs.frame);
+    if (prefs.order === "chinese-first" || prefs.order === "english-first") setOrder(prefs.order);
+    if (MODELS.includes(prefs.model)) setModel(prefs.model);
+    if ([48, 54, 60, 66, 72, 78, 84].includes(prefs.maxChars)) setMaxChars(prefs.maxChars);
+    if (prefs.mode === "new-cue" || prefs.mode === "line-break") setMode(prefs.mode);
+    const savedKey = loadApiKey(storage);
+    if (savedKey) {
+      setApiKey(savedKey);
+      setRememberKey(true);
+    }
+    setLastSession(listSessions(storage)[0] ?? null);
+    /* eslint-enable react-hooks/set-state-in-effect */
+    storageReady.current = true;
+  }, []);
 
   const profile = useMemo(() => getSubtitleProfile(editor, frame), [editor, frame]);
   const prepared = useMemo(
@@ -179,8 +270,11 @@ export default function SubtitleTool() {
     ? Math.round((translatedCount / tidy.length) * 100)
     : 0;
 
+  // A restored or re-split file can be complete without a translation run.
+  const progressStatus =
+    status === "ready" && tidy.length > 0 && translatedCount === tidy.length ? "done" : status;
   const progressLabel =
-    status === "done"
+    progressStatus === "done"
       ? "制作完成"
       : status === "translating"
         ? "正在翻译与校准…"
@@ -195,15 +289,21 @@ export default function SubtitleTool() {
     setStatus(sourceCues.length ? "ready" : "idle");
   }
 
-  async function loadText(text: string, name: string) {
+  async function loadText(text: string, name: string, persist = true) {
     try {
       const cues = parseSrt(text) as Cue[];
+      const id = persist ? fingerprint(text) : null;
+      const saved = id ? loadSession(browserStorage(), id) : null;
+      const restored: Record<string, string> = saved?.translations ?? {};
+      const restoredCount = Object.values(restored).filter((value) => value.trim()).length;
+      sourceTextRef.current = text;
+      setSessionId(id);
       setSourceName(name);
       setSourceCues(cues);
       setPreviewIndex(0);
-      setTranslationsByKey({});
+      setTranslationsByKey(restored);
       setStatus("ready");
-      setMessage("");
+      setMessage(restoredCount ? `已恢复上次保存的 ${restoredCount} 条译文。` : "");
     } catch (error) {
       setStatus("error");
       setMessage(error instanceof Error ? error.message : "字幕文件读取失败。");
@@ -223,6 +323,23 @@ export default function SubtitleTool() {
       return;
     }
     await loadText(await file.text(), file.name);
+  }
+
+  function resumeLastSession() {
+    if (!lastSession) return;
+    const session = loadSession(browserStorage(), lastSession.id);
+    if (session?.sourceText) {
+      void loadText(session.sourceText, session.name);
+    } else {
+      setLastSession(null);
+    }
+  }
+
+  function forgetLastSession() {
+    if (!lastSession) return;
+    const storage = browserStorage();
+    removeSession(storage, lastSession.id);
+    setLastSession(listSessions(storage)[0] ?? null);
   }
 
   async function translate(restart = false) {
@@ -418,7 +535,20 @@ export default function SubtitleTool() {
                 </>
               )}
             </div>
-            {!sourceCues.length && <button className="text-button demo-button" type="button" onClick={() => void loadText(SAMPLE_SRT, "演示字幕.srt")}>试用演示字幕</button>}
+            {!sourceCues.length && lastSession && (
+              <div className="resume-card">
+                <span>上次的任务 · {formatSavedAt(lastSession.savedAt)}</span>
+                <strong title={lastSession.name}>{lastSession.name}</strong>
+                <div className="file-meta">
+                  <span>{lastSession.hasSource ? `已翻译 ${lastSession.translated} 条` : `已翻译 ${lastSession.translated} 条 · 重新选择该文件即可继续`}</span>
+                  <span>
+                    {lastSession.hasSource && <button className="text-button" type="button" onClick={resumeLastSession}>继续</button>}
+                    <button className="text-button" type="button" onClick={forgetLastSession}>删除</button>
+                  </span>
+                </div>
+              </div>
+            )}
+            {!sourceCues.length && <button className="text-button demo-button" type="button" onClick={() => void loadText(SAMPLE_SRT, "演示字幕.srt", false)}>试用演示字幕</button>}
           </section>
 
           <section className="control-section settings-panel">
@@ -488,9 +618,13 @@ export default function SubtitleTool() {
                 <span>DeepSeek API Key</span>
                 <input id="api-key" type="password" autoComplete="off" spellCheck="false" value={apiKey} placeholder="sk-…" onChange={(event) => setApiKey(event.target.value)} />
               </label>
+              <label className="checkbox-field">
+                <input type="checkbox" checked={rememberKey} onChange={(event) => setRememberKey(event.target.checked)} />
+                在本机浏览器记住 Key
+              </label>
             </fieldset>
             {sourceCues.length > 0 && (
-              <div className={`progress-box ${status}`} aria-live="polite">
+              <div className={`progress-box ${progressStatus}`} aria-live="polite">
                 <div className="progress-heading"><span>{progressLabel}</span><span>已完成 {translatedCount}/{tidy.length}</span></div>
                 <div className="progress-track" role="progressbar" aria-label="双语字幕制作进度" aria-valuemin={0} aria-valuemax={100} aria-valuenow={progress}>
                   <i style={{ width: `${progress}%` }} />
@@ -578,7 +712,7 @@ export default function SubtitleTool() {
           )}
         </section>
       </div>
-      <footer>字幕和 API Key 不保存；翻译由 DeepSeek 处理。</footer>
+      <footer>字幕和译文进度只保存在你的浏览器中，不上传本站服务器；API Key 仅在勾选后保存在本机。翻译由 DeepSeek 处理。</footer>
     </main>
   );
 }
