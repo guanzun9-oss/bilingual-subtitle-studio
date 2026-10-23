@@ -301,3 +301,44 @@ test("serializes Chinese first with UTF-8 BOM", () => {
   assert.ok(output.startsWith("\uFEFF1\n"));
   assert.match(output, /这是中文。\nThis is a long first thought/);
 });
+
+test("piece keys follow unchanged text when layout settings re-split cues", () => {
+  const cues = parseSrt(`1
+00:00:01,000 --> 00:00:09,000
+Short one. When we started this project, we thought the hardest part would be the technology.
+
+2
+00:00:10,000 --> 00:00:12,000
+Short one.`);
+  const landscape = tidyCues(cues, { maxChars: 72, lineChars: 42 });
+  const portrait = tidyCues(cues, { maxChars: 72, lineChars: 32 });
+  const lineBreak = tidyCues(cues, { mode: "line-break", lineChars: 42 });
+
+  // Positional ids are reused for different text; keys never are.
+  assert.equal(new Set(landscape.map((cue) => cue.key)).size, landscape.length);
+  const keysOf = (prepared) => new Set(prepared.map((cue) => cue.key));
+  for (const prepared of [portrait, lineBreak]) {
+    for (const cue of prepared) {
+      const match = landscape.find((other) => other.key === cue.key);
+      if (match) assert.equal(match.text.replace(/\n/g, " "), cue.text.replace(/\n/g, " "));
+    }
+  }
+  // The short sentence is identical everywhere, so its work carries over.
+  assert.ok(keysOf(portrait).has(landscape[0].key));
+  assert.ok(keysOf(lineBreak).has(landscape[0].key));
+  // Identical text in a different source cue is still a separate piece.
+  assert.notEqual(landscape[0].key, landscape.at(-1).key);
+  assert.equal(landscape[0].text, landscape.at(-1).text);
+});
+
+test("repeated identical sentences in one cue keep separate keys", () => {
+  const cues = parseSrt(`1
+00:00:01,000 --> 00:00:03,000
+Yes. Yes. No.`);
+  const prepared = tidyCues(cues);
+  assert.deepEqual(prepared.map((cue) => cue.text), ["Yes.", "Yes.", "No."]);
+  assert.equal(new Set(prepared.map((cue) => cue.key)).size, 3);
+  // The occurrence count is stable when settings re-split the cue.
+  const lineBreak = tidyCues(cues, { mode: "line-break" });
+  assert.deepEqual(lineBreak.map((cue) => cue.key), prepared.map((cue) => cue.key));
+});
