@@ -100,6 +100,8 @@ test("unavailable or corrupted storage never throws", () => {
   }
   corrupted.setItem("subtitle-studio:session:c", JSON.stringify({ id: "c", translations: {}, sourceText: 42 }));
   assert.equal(loadSession(corrupted, "c"), null);
+  corrupted.setItem("subtitle-studio:session:d", JSON.stringify({ id: "d", translations: {}, glossary: ["Zane"] }));
+  assert.equal(loadSession(corrupted, "d"), null);
 });
 
 test("removing a session deletes its data and index entry", () => {
@@ -121,4 +123,12 @@ test("preferences and an opted-in API key round-trip; an empty key is forgotten"
   saveApiKey(storage, "");
   assert.equal(loadApiKey(storage), "");
   assert.equal(storage.data.size, 1);
+});
+
+test("a session keeps its own glossary", () => {
+  const storage = memoryStorage();
+  saveSession(storage, { id: "a", name: "a.srt", sourceText: "A", translations: {}, glossary: "Zane = 赞恩" });
+  saveSession(storage, { id: "b", name: "b.srt", sourceText: "B", translations: {}, glossary: "" });
+  assert.equal(loadSession(storage, "a").glossary, "Zane = 赞恩");
+  assert.equal(loadSession(storage, "b").glossary, undefined);
 });

@@ -357,3 +357,15 @@ test("a number spoken in the subtitle text is kept", () => {
   const cues = parseSrt("1\n00:00:01,000 --> 00:00:02,000\nHow many?\n42\n\n2\n00:00:03,000 --> 00:00:04,000\nThat many.\n");
   assert.deepEqual(cues.map((cue) => cue.text), ["How many? 42", "That many."]);
 });
+
+test("every piece knows the text of the previous source cue", () => {
+  const prepared = tidyCues(parseSrt(`1
+00:00:01,000 --> 00:00:03,000
+When we started this
+
+2
+00:00:03,000 --> 00:00:06,000
+project, it was hard. Then it got easier.`));
+  assert.equal(prepared[0].previousText, undefined);
+  assert.deepEqual(prepared.slice(1).map((cue) => cue.previousText), ["When we started this", "When we started this"]);
+});

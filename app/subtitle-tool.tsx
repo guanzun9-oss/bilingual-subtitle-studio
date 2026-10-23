@@ -11,6 +11,7 @@ import {
   tidyCues,
   wrapChineseSubtitle,
 } from "@/lib/srt-core.mjs";
+import { parseGlossary } from "@/lib/glossary.mjs";
 import { EDITOR_PROFILES, getSubtitleProfile } from "@/lib/subtitle-profiles.mjs";
 import {
   fingerprint,
@@ -34,6 +35,7 @@ type Cue = {
   endMs: number;
   text: string;
   contextText?: string;
+  previousText?: string;
 };
 
 type Mode = "new-cue" | "line-break";
@@ -164,6 +166,7 @@ export default function SubtitleTool() {
   const [message, setMessage] = useState("");
   const [dragging, setDragging] = useState(false);
   const [rememberKey, setRememberKey] = useState(false);
+  const [glossaryText, setGlossaryText] = useState("");
   // Fingerprint of the loaded file; null for the demo, which is not saved.
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [lastSession, setLastSession] = useState<SavedSession | null>(null);
@@ -190,10 +193,11 @@ export default function SubtitleTool() {
         name: sourceName,
         sourceText: sourceTextRef.current,
         translations: translationsByKey,
+        glossary: glossaryText,
       });
     }, 500);
     return () => clearTimeout(timer);
-  }, [sessionId, sourceName, translationsByKey]);
+  }, [sessionId, sourceName, translationsByKey, glossaryText]);
 
   useEffect(() => {
     // Restoring browser-only state has to wait until after hydration.
@@ -302,6 +306,8 @@ export default function SubtitleTool() {
       setSourceCues(cues);
       setPreviewIndex(0);
       setTranslationsByKey(restored);
+      // Names belong to a film: restore its list, or keep what was typed for a new file.
+      if (saved) setGlossaryText(saved.glossary ?? "");
       setStatus("ready");
       setMessage(restoredCount ? `已恢复上次保存的 ${restoredCount} 条译文。` : "");
     } catch (error) {
@@ -380,6 +386,7 @@ export default function SubtitleTool() {
       }
 
       const lineChars = profile.chineseLineChars;
+      const glossary = parseGlossary(glossaryText);
       await translateInBatches(
         pending,
         async (group: Cue[], signal: AbortSignal) => {
@@ -390,10 +397,12 @@ export default function SubtitleTool() {
             body: JSON.stringify({
               apiKey: apiKey.trim(),
               model,
+              glossary,
               items: group.map((cue) => ({
                 id: cue.id,
                 text: cue.text.replace(/\n/g, " "),
                 context: (cue.contextText || cue.text).replace(/\n/g, " "),
+                before: cue.previousText,
                 maxChineseChars: maxChineseChars(cue, lineChars),
               })),
             }),
@@ -623,6 +632,11 @@ export default function SubtitleTool() {
                 <input type="checkbox" checked={rememberKey} onChange={(event) => setRememberKey(event.target.checked)} />
                 在本机浏览器记住 Key
               </label>
+              <label className="field glossary-field" htmlFor="glossary">
+                <span>人名与术语（可选）</span>
+                <textarea id="glossary" rows={3} spellCheck="false" value={glossaryText} placeholder={"每行一条，例如：\nZane = 赞恩\nKubernetes = Kubernetes"} onChange={(event) => setGlossaryText(event.target.value)} />
+              </label>
+              <span className="field-hint">整部字幕统一使用这些译名；修改后只影响之后翻译的条目。</span>
             </fieldset>
             {sourceCues.length > 0 && (
               <div className={`progress-box ${progressStatus}`} aria-live="polite">

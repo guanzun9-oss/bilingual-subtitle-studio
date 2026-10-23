@@ -1,4 +1,9 @@
 import { NextResponse } from "next/server";
+import {
+  MAX_GLOSSARY_ENTRIES,
+  MAX_GLOSSARY_TERM_LENGTH,
+  glossaryFor,
+} from "@/lib/glossary.mjs";
 
 export const runtime = "edge";
 
@@ -6,8 +11,12 @@ type TranslationItem = {
   id: string;
   text: string;
   context?: string;
+  /** Text of the previous source cue, used where the batch does not show it. */
+  before?: string;
   maxChineseChars?: number;
 };
+
+type GlossaryEntry = [string, string];
 
 type ParsedTranslation = {
   id: string;
@@ -102,6 +111,7 @@ async function requestDeepSeek(
   apiKey: string,
   model: string,
   items: TranslationItem[],
+  glossary: GlossaryEntry[],
 ) {
   let lastError: ApiError | null = null;
 
@@ -109,27 +119,39 @@ async function requestDeepSeek(
   // Send it once and use short request-local IDs to reduce input and output tokens.
   const contexts: string[] = [];
   const contextIndexes = new Map<string, number>();
+  const indexOfContext = (context: string) => {
+    let index = contextIndexes.get(context);
+    if (index === undefined) {
+      index = contexts.length;
+      contexts.push(context);
+      contextIndexes.set(context, index);
+    }
+    return index;
+  };
+  // Neighbouring items in a batch already show how a sentence continues
+  // across cues. Send the previous cue only where the batch starts or skips
+  // ahead, and never the next one, which invites translating it early.
+  const shown = new Set<string>();
   const idMap = new Map<string, string>();
   const compactItems = items.map((item, index) => {
     const id = `s${index}`;
     const context = item.context || item.text;
-    let contextIndex: number | undefined;
-    if (context !== item.text) {
-      contextIndex = contextIndexes.get(context);
-      if (contextIndex === undefined) {
-        contextIndex = contexts.length;
-        contexts.push(context);
-        contextIndexes.set(context, contextIndex);
-      }
-    }
+    const contextIndex = context !== item.text ? indexOfContext(context) : undefined;
+    const beforeIndex = item.before && !shown.has(item.before)
+      ? indexOfContext(item.before)
+      : undefined;
+    if (item.before) shown.add(item.before);
+    shown.add(context);
     idMap.set(id, item.id);
     return {
       id,
       t: item.text,
       c: contextIndex,
+      b: beforeIndex,
       m: item.maxChineseChars || 32,
     };
   });
+  const terms = glossaryFor(glossary, [...items.map((item) => item.text), ...contexts]);
 
   for (let attempt = 0; attempt < 3; attempt += 1) {
     try {
@@ -151,11 +173,15 @@ async function requestDeepSeek(
             {
               role: "system",
               content:
-                "专业影视字幕英译简中。输入中 c 是共享上下文数组，s 是条目；每项 t 才是待译文本，c 索引仅供理解，m 是含标点的中文字符上限。逐项严格对齐，不移动、合并或补写相邻内容。译文自然口语化、精炼且不换行，保留人名、术语和语气，在不遗漏核心信息下严格满足 m。只返回 JSON 对象：{\"translations\":{\"s0\":\"译文\"}}，每个 id 恰好一次。",
+                "专业影视字幕英译简中。输入中 c 是共享上下文数组，s 是条目；每项 t 才是待译文本，c 索引是所属原字幕、b 索引是前一条原字幕，二者仅供理解、不得译入当前条目；m 是含标点的中文字符上限；g 是必须统一使用的译名表（原文: 译名）。逐项严格对齐，不移动、合并或补写相邻内容。译文自然口语化、精炼且不换行，保留人名、术语和语气，在不遗漏核心信息下严格满足 m。只返回 JSON 对象：{\"translations\":{\"s0\":\"译文\"}}，每个 id 恰好一次。",
             },
             {
               role: "user",
-              content: JSON.stringify({ c: contexts, s: compactItems }),
+              content: JSON.stringify({
+                c: contexts,
+                s: compactItems,
+                ...(terms.length ? { g: Object.fromEntries(terms) } : {}),
+              }),
             },
           ],
         }),
@@ -229,6 +255,7 @@ export async function POST(request: Request) {
     apiKey?: string;
     model?: string;
     items?: TranslationItem[];
+    glossary?: unknown;
   };
 
   try {
@@ -260,18 +287,40 @@ export async function POST(request: Request) {
             item.maxChineseChars >= 8 &&
             item.maxChineseChars <= 32)) &&
         (item.context === undefined ||
-          (typeof item.context === "string" && item.context.length <= 4_000)),
+          (typeof item.context === "string" && item.context.length <= 4_000)) &&
+        (item.before === undefined ||
+          (typeof item.before === "string" && item.before.length <= 4_000)),
     )
     .map((item) => ({
       id: item.id,
       text: item.text.trim(),
       context: item.context?.trim() || item.text.trim(),
+      before: item.before?.trim() || undefined,
       maxChineseChars: item.maxChineseChars || 32,
     }));
 
   if (safeItems.length !== items.length || safeItems.some((item) => !item.text)) {
     return jsonError("有字幕内容不符合要求。", 400);
   }
+
+  const glossaryInput = body.glossary ?? [];
+  const isEntry = (entry: unknown): entry is GlossaryEntry =>
+    Array.isArray(entry) &&
+    entry.length === 2 &&
+    entry.every(
+      (term) =>
+        typeof term === "string" &&
+        term.trim() !== "" &&
+        term.length <= MAX_GLOSSARY_TERM_LENGTH,
+    );
+  if (
+    !Array.isArray(glossaryInput) ||
+    glossaryInput.length > MAX_GLOSSARY_ENTRIES ||
+    !glossaryInput.every(isEntry)
+  ) {
+    return jsonError("译名表格式不符合要求。", 400);
+  }
+  const glossary: GlossaryEntry[] = glossaryInput;
 
   const translations: Record<string, string> = {};
   let remaining = safeItems;
@@ -280,7 +329,7 @@ export async function POST(request: Request) {
     // If a response omits one or two IDs, retry only those IDs in a smaller
     // repair request instead of failing the whole batch.
     for (let round = 0; round < 3 && remaining.length; round += 1) {
-      const translated = await requestDeepSeek(apiKey, model, remaining);
+      const translated = await requestDeepSeek(apiKey, model, remaining, glossary);
       Object.assign(translations, translated);
       remaining = remaining.filter((item) => !translations[item.id]);
     }

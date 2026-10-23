@@ -46,6 +46,9 @@ h2 { margin: 0 0 16px; font-size: 14px; font-weight: 600; }
 .resume-card strong { overflow: hidden; font-size: 13px; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
 .checkbox-field { display: flex; align-items: center; gap: 7px; margin: -4px 0 0; color: var(--muted); font-size: 11px; }
 .checkbox-field input { accent-color: var(--blue); }
+.glossary-field { margin: 14px 0 6px; }
+.glossary-field textarea { width: 100%; min-height: 64px; padding: 8px 10px; resize: vertical; color: var(--text); background: white; border: 1px solid #d8dee7; border-radius: 7px; font-size: 12px; line-height: 1.6; }
+.glossary-field textarea::placeholder { color: #a0a7b3; }
 .secondary-button, .primary-button, .download-button { display: inline-flex; justify-content: center; align-items: center; min-height: 36px; padding: 8px 13px; border: 1px solid var(--border); border-radius: 7px; background: white; color: var(--text); font-size: 12px; font-weight: 500; white-space: nowrap; }
 .secondary-button:hover:not(:disabled) { background: #f7f8fa; border-color: #c6cdd8; }
 .primary-button, .download-button { background: var(--blue); color: white; border-color: var(--blue); }

@@ -118,3 +118,48 @@ test("rejects length targets outside the supported range", async () => {
     assert.equal(status, 400, String(maxChineseChars));
   }
 });
+
+test("adds the previous cue only where the batch does not already show it", async () => {
+  let sent;
+  mockUpstream(async (request) => {
+    sent = JSON.parse((await request.json()).messages[1].content);
+    return completion({ translations: { s0: "一", s1: "二", s2: "三" } });
+  });
+  await translate({
+    items: [
+      // Starts mid-film: the previous cue is not in this batch.
+      { id: "cue-5-1", text: "project, it was hard.", context: "project, it was hard. Then easier.", before: "When we started this" },
+      { id: "cue-5-2", text: "Then easier.", context: "project, it was hard. Then easier.", before: "When we started this" },
+      // Its previous cue is the one above, which the model already sees.
+      { id: "cue-6-1", text: "Good.", before: "project, it was hard. Then easier." },
+    ],
+  });
+
+  assert.deepEqual(sent.c, ["project, it was hard. Then easier.", "When we started this"]);
+  assert.deepEqual(sent.s.map((item) => item.b), [1, undefined, undefined]);
+});
+
+test("sends only the glossary terms used in the batch", async () => {
+  const payloads = [];
+  mockUpstream(async (request) => {
+    payloads.push(JSON.parse((await request.json()).messages[1].content));
+    return completion({ translations: { s0: "赞恩来了。" } });
+  });
+  const glossary = [["Zane", "赞恩"], ["Mars", "火星"]];
+  await translate({ glossary, items: [{ id: "a", text: "Zane is here." }] });
+  await translate({ glossary, items: [{ id: "a", text: "Nobody is here." }] });
+
+  assert.deepEqual(payloads[0].g, { Zane: "赞恩" });
+  assert.equal("g" in payloads[1], false);
+});
+
+test("rejects a malformed glossary without contacting the provider", async () => {
+  mockUpstream(() => {
+    throw new Error("Invalid input must not trigger an upstream request");
+  });
+  for (const glossary of ["Zane = 赞恩", [["Zane"]], [["Zane", 1]], [["", "空"]], Array.from({ length: 101 }, (_, i) => [`T${i}`, "词"])]) {
+    const { status, body } = await translate({ glossary, items: [{ id: "a", text: "Hi." }] });
+    assert.equal(status, 400);
+    assert.match(body.error, /译名表/);
+  }
+});
