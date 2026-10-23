@@ -41,6 +41,11 @@ h2 { margin: 0 0 16px; font-size: 14px; font-weight: 600; }
 .drop-zone > span, .file-meta { color: var(--subtle); font-size: 11px; }
 .file-meta { display: flex; justify-content: space-between; align-items: center; }
 .demo-button { display: block; margin: 7px auto -5px; }
+.resume-card { display: flex; flex-direction: column; gap: 3px; margin-top: 10px; padding: 10px 12px; border: 1px solid #c9d7f5; border-radius: 8px; background: var(--blue-soft); }
+.resume-card > span { color: var(--muted); font-size: 11px; }
+.resume-card strong { overflow: hidden; font-size: 13px; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
+.checkbox-field { display: flex; align-items: center; gap: 7px; margin: -4px 0 0; color: var(--muted); font-size: 11px; }
+.checkbox-field input { accent-color: var(--blue); }
 .secondary-button, .primary-button, .download-button { display: inline-flex; justify-content: center; align-items: center; min-height: 36px; padding: 8px 13px; border: 1px solid var(--border); border-radius: 7px; background: white; color: var(--text); font-size: 12px; font-weight: 500; white-space: nowrap; }
 .secondary-button:hover:not(:disabled) { background: #f7f8fa; border-color: #c6cdd8; }
 .primary-button, .download-button { background: var(--blue); color: white; border-color: var(--blue); }
