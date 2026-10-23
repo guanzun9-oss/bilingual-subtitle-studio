@@ -16,6 +16,8 @@ import { translateInBatches } from "@/lib/translation-queue.mjs";
 
 type Cue = {
   id: string;
+  /** Identifies the source cue and text, so a translation survives re-splitting. */
+  key: string;
   sourceId: string;
   startMs: number;
   endMs: number;
@@ -66,7 +68,9 @@ export default function SubtitleTool() {
   const [order, setOrder] = useState<Order>("chinese-first");
   const [model, setModel] = useState("deepseek-v4-flash");
   const [apiKey, setApiKey] = useState("");
-  const [translations, setTranslations] = useState<Record<string, string>>({});
+  // Keyed by cue text rather than position: changing the layout settings
+  // re-splits cues, and every piece whose text is unchanged keeps its work.
+  const [translationsByKey, setTranslationsByKey] = useState<Record<string, string>>({});
   const [status, setStatus] = useState<
     "idle" | "ready" | "translating" | "done" | "error"
   >("idle");
@@ -88,6 +92,12 @@ export default function SubtitleTool() {
     [sourceCues, maxChars, mode, profile],
   );
   const tidy = prepared.cues;
+  const translations = useMemo(
+    () => Object.fromEntries(
+      tidy.flatMap((cue) => translationsByKey[cue.key] ? [[cue.id, translationsByKey[cue.key]]] : []),
+    ) as Record<string, string>,
+    [tidy, translationsByKey],
+  );
   const activePreviewIndex = Math.min(previewIndex, Math.max(0, tidy.length - 1));
   const previewCue = tidy[activePreviewIndex];
   const cueWarnings = useMemo(
@@ -129,8 +139,7 @@ export default function SubtitleTool() {
             ? "任务已暂停，可以继续"
             : "制作进度";
 
-  function resetOutput() {
-    setTranslations({});
+  function settingsChanged() {
     setMessage("");
     setStatus(sourceCues.length ? "ready" : "idle");
   }
@@ -141,7 +150,7 @@ export default function SubtitleTool() {
       setSourceName(name);
       setSourceCues(cues);
       setPreviewIndex(0);
-      setTranslations({});
+      setTranslationsByKey({});
       setStatus("ready");
       setMessage("");
     } catch (error) {
@@ -186,16 +195,13 @@ export default function SubtitleTool() {
     abortRef.current = controller;
     setStatus("translating");
     setMessage("");
-    const validIds = new Set(tidy.map((cue) => cue.id));
-    const cuesById = new Map(tidy.map((cue) => [cue.id, cue]));
+    const keyById = new Map(tidy.map((cue) => [cue.id, cue.key]));
     const nextTranslations: Record<string, string> = restart
       ? {}
       : Object.fromEntries(
-          Object.entries(translations).filter(
-            ([id, text]) => cuesById.has(id) && text.trim(),
-          ),
+          Object.entries(translations).filter(([, text]) => text.trim()),
         );
-    if (restart) setTranslations({});
+    if (restart) setTranslationsByKey({});
     const pending = tidy.filter((cue) => !nextTranslations[cue.id]?.trim());
 
     try {
@@ -236,7 +242,11 @@ export default function SubtitleTool() {
           signal: controller.signal,
           onProgress: (received: Record<string, string>) => {
             Object.assign(nextTranslations, received);
-            setTranslations({ ...nextTranslations });
+            setTranslationsByKey((current) => {
+              const next = { ...current };
+              for (const [id, text] of Object.entries(received)) next[keyById.get(id)!] = text;
+              return next;
+            });
           },
         },
       );
@@ -261,9 +271,7 @@ export default function SubtitleTool() {
         setMessage("已停止翻译。");
       } else {
         setStatus("error");
-        const finished = Object.keys(nextTranslations).filter((id) =>
-          validIds.has(id),
-        ).length;
+        const finished = Object.keys(nextTranslations).length;
         const detail = error instanceof Error ? error.message : "翻译失败。";
         setMessage(
           `${detail} 已保留完成的 ${finished} 条，点击按钮可从这里继续。`,
@@ -274,8 +282,8 @@ export default function SubtitleTool() {
     }
   }
 
-  function updateTranslation(id: string, value: string) {
-    setTranslations((current) => ({ ...current, [id]: value }));
+  function updateTranslation(key: string, value: string) {
+    setTranslationsByKey((current) => ({ ...current, [key]: value }));
   }
 
   function download(bilingual = true) {
@@ -374,7 +382,7 @@ export default function SubtitleTool() {
               <div className="two-columns">
                 <label className="field" htmlFor="frame">
                   <span>画幅</span>
-                  <select id="frame" aria-label="视频画幅" value={frame} onChange={(event) => { setFrame(event.target.value); resetOutput(); }}>
+                  <select id="frame" aria-label="视频画幅" value={frame} onChange={(event) => { setFrame(event.target.value); settingsChanged(); }}>
                     <option value="landscape">横屏 16:9</option>
                     <option value="portrait">竖屏 9:16</option>
                   </select>
@@ -395,11 +403,11 @@ export default function SubtitleTool() {
                   <label className="control-label" htmlFor="max-chars">
                     每条英文长度 <output htmlFor="max-chars">{maxChars}</output>
                   </label>
-                  <input id="max-chars" className="range" type="range" min="48" max="84" step="6" value={maxChars} onChange={(event) => { setMaxChars(Number(event.target.value)); resetOutput(); }} />
+                  <input id="max-chars" className="range" type="range" min="48" max="84" step="6" value={maxChars} onChange={(event) => { setMaxChars(Number(event.target.value)); settingsChanged(); }} />
                   <span className="field-hint">每行英文约 {profile.englishLineChars} 字符，中文约 {profile.chineseLineChars} 字</span>
                   <div className="mode-options" role="group" aria-label="长句处理方式">
-                    <label><input type="radio" name="mode" value="new-cue" checked={mode === "new-cue"} onChange={() => { setMode("new-cue"); resetOutput(); }} />超长句拆成新条目</label>
-                    <label><input type="radio" name="mode" value="line-break" checked={mode === "line-break"} onChange={() => { setMode("line-break"); resetOutput(); }} />超长句仅换行</label>
+                    <label><input type="radio" name="mode" value="new-cue" checked={mode === "new-cue"} onChange={() => { setMode("new-cue"); settingsChanged(); }} />超长句拆成新条目</label>
+                    <label><input type="radio" name="mode" value="line-break" checked={mode === "line-break"} onChange={() => { setMode("line-break"); settingsChanged(); }} />超长句仅换行</label>
                   </div>
                   <label className="field" htmlFor="model">
                     <span>翻译模型</span>
@@ -504,7 +512,7 @@ export default function SubtitleTool() {
                       <textarea
                         aria-label={`第 ${index + 1} 条中文字幕`}
                         value={translations[cue.id] || ""}
-                        onChange={(event) => updateTranslation(cue.id, event.target.value)}
+                        onChange={(event) => updateTranslation(cue.key, event.target.value)}
                         placeholder={status === "done" ? "编辑译文" : "中文译文"}
                         rows={Math.max(1, wrapChineseSubtitle(translations[cue.id] || "", profile.chineseLineChars).split("\n").length)}
                       />
