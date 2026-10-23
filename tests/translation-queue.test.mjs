@@ -145,3 +145,43 @@ test("valid text that exceeds a length hint is still accepted", async () => {
   }), fast);
   assert.equal(result["cue-1"], long);
 });
+
+test("an account error stops a batch that is waiting to retry elsewhere", async () => {
+  let rejectedAt = null;
+  let callsAfterRejection = 0;
+  await assert.rejects(
+    translateInBatches(items(24), async (batch) => {
+      if (rejectedAt !== null) callsAfterRejection += 1;
+      if (batch[0].id === "cue-13") {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        rejectedAt = Date.now();
+        return { status: 429, data: { error: "DeepSeek 请求过于频繁或余额不足，请稍后重试。" } };
+      }
+      // This batch keeps failing with server errors and would retry and split.
+      return { status: 502, data: { error: "DeepSeek 暂时无法完成这一批翻译。" } };
+    }, { retryDelayMs: 30, concurrency: 2 }),
+    (error) => {
+      assert.equal(error.terminal, true);
+      assert.match(error.message, /请求过于频繁/);
+      return true;
+    },
+  );
+  assert.equal(callsAfterRejection, 0);
+});
+
+test("an account error is reported even after an ordinary batch failure", async () => {
+  await assert.rejects(
+    translateInBatches(items(24), async (batch) => {
+      if (batch[0].id === "cue-13") {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        return { status: 401, data: { error: "API Key 无效或没有访问权限，请检查后重试。" } };
+      }
+      throw new Error("网络连接中断");
+    }, { retryDelayMs: 0, concurrency: 2 }),
+    (error) => {
+      assert.equal(error.terminal, true);
+      assert.match(error.message, /API Key 无效/);
+      return true;
+    },
+  );
+});
