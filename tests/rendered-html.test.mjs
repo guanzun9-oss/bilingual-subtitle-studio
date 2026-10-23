@@ -1,28 +1,68 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { readFile, readdir } from "node:fs/promises";
+import path from "node:path";
+import { after, mock, test } from "node:test";
+import { fileURLToPath } from "node:url";
+import { Miniflare, convertV4MiniflareOptions } from "miniflare";
 
+// Run the production bundle in workerd, the runtime Cloudflare uses, so
+// Workers-only imports such as `cloudflare:workers` resolve as they do live.
+const serverDir = new URL("../dist/server/", import.meta.url);
+let worker;
 let workerPromise;
+let upstreamHandler = () => {
+  throw new Error("Unexpected upstream request");
+};
 
 async function loadWorker() {
-  const workerUrl = new URL("../dist/server/index.js", import.meta.url);
-  workerPromise ??= import(workerUrl.href);
-  return (await workerPromise).default;
+  workerPromise ??= (async () => {
+    const config = JSON.parse(await readFile(new URL("wrangler.json", serverDir), "utf8"));
+    const root = fileURLToPath(serverDir);
+    const files = await readdir(root, { recursive: true });
+    // Miniflare 5 still accepts the documented v4 option shape through this adapter.
+    worker = new Miniflare(convertV4MiniflareOptions({
+      workers: [{
+        name: config.name,
+        modulesRoot: root,
+        modules: [
+          // The entry module must come first.
+          { type: "ESModule", path: path.join(root, "index.js") },
+          ...files
+            .filter((file) => /\.m?js$/.test(file) && file !== "index.js")
+            .map((file) => ({ type: "ESModule", path: path.join(root, file) })),
+        ],
+        compatibilityDate: config.compatibility_date,
+        compatibilityFlags: config.compatibility_flags,
+        serviceBindings: {
+          ASSETS: () => new Response("Not found", { status: 404 }),
+        },
+        outboundService: (request) => upstreamHandler(request),
+      }],
+    }));
+    await worker.ready;
+    return worker;
+  })();
+  return workerPromise;
 }
+
+// Dispose even when startup failed, or the workerd process keeps the run alive.
+after(async () => {
+  await worker?.dispose();
+});
 
 async function fetchWorker(request) {
   const worker = await loadWorker();
-  return worker.fetch(
-    request,
-    {
-      ASSETS: {
-        fetch: async () => new Response("Not found", { status: 404 }),
-      },
-    },
-    {
-      waitUntil() {},
-      passThroughOnException() {},
-    },
-  );
+  return worker.dispatchFetch(request.url, {
+    method: request.method,
+    headers: request.headers,
+    body: request.body ? await request.text() : undefined,
+  });
+}
+
+function mockUpstream(implementation) {
+  const handler = mock.fn(implementation);
+  upstreamHandler = handler;
+  return handler;
 }
 
 test("server renders the subtitle studio", async () => {
@@ -48,9 +88,9 @@ function translationRequest(body) {
   });
 }
 
-test("production translation route rejects invalid input without contacting the provider", async (t) => {
+test("production translation route rejects invalid input without contacting the provider", async () => {
   await loadWorker();
-  const upstream = t.mock.method(globalThis, "fetch", () => {
+  const upstream = mockUpstream(() => {
     throw new Error("Invalid input must not trigger an upstream request");
   });
   for (const body of [
@@ -70,13 +110,13 @@ test("production translation route rejects invalid input without contacting the 
   assert.equal(upstream.mock.callCount(), 0);
 });
 
-test("production translation route preserves valid overlong results and does not expose the key", async (t) => {
+test("production translation route preserves valid overlong results and does not expose the key", async () => {
   await loadWorker();
   const translation = "这是长度超过建议但仍然有效的中文字幕。".repeat(3);
-  const upstream = t.mock.method(globalThis, "fetch", async (url, options) => {
-    assert.equal(url, "https://api.deepseek.com/chat/completions");
-    assert.equal(options.headers.Authorization, "Bearer fixture-key");
-    const body = JSON.parse(options.body);
+  const upstream = mockUpstream(async (request) => {
+    assert.equal(request.url, "https://api.deepseek.com/chat/completions");
+    assert.equal(request.headers.get("Authorization"), "Bearer fixture-key");
+    const body = await request.json();
     assert.equal(body.model, "deepseek-v4-flash");
     return Response.json({
       choices: [{ message: { content: JSON.stringify({ translations: { s0: translation } }) } }],
@@ -93,9 +133,9 @@ test("production translation route preserves valid overlong results and does not
   assert.equal(upstream.mock.callCount(), 1);
 });
 
-test("production translation route reports rejected credentials without retrying or caching", async (t) => {
+test("production translation route reports rejected credentials without retrying or caching", async () => {
   await loadWorker();
-  const upstream = t.mock.method(globalThis, "fetch", async () => Response.json({
+  const upstream = mockUpstream(async () => Response.json({
     error: { message: "invalid credentials" },
   }, { status: 401 }));
   const response = await fetchWorker(translationRequest({
