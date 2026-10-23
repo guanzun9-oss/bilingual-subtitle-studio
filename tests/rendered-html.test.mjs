@@ -1,71 +1,6 @@
 import assert from "node:assert/strict";
-import { readFile, readdir } from "node:fs/promises";
-import path from "node:path";
-import { after, mock, test } from "node:test";
-import { fileURLToPath } from "node:url";
-import { Miniflare, convertV4MiniflareOptions } from "miniflare";
-
-// Run the production bundle in workerd, the runtime Cloudflare uses, so
-// Workers-only imports such as `cloudflare:workers` resolve as they do live.
-// Miniflare comes with the Cloudflare tooling rather than as its own pinned
-// dependency, so the test runtime moves with wrangler and the Vite plugin.
-const serverDir = new URL("../dist/server/", import.meta.url);
-let worker;
-let workerPromise;
-let upstreamHandler = () => {
-  throw new Error("Unexpected upstream request");
-};
-
-async function loadWorker() {
-  workerPromise ??= (async () => {
-    const config = JSON.parse(await readFile(new URL("wrangler.json", serverDir), "utf8"));
-    const root = fileURLToPath(serverDir);
-    const files = await readdir(root, { recursive: true });
-    // Miniflare 5 still accepts the documented v4 option shape through this adapter.
-    worker = new Miniflare(convertV4MiniflareOptions({
-      workers: [{
-        name: config.name,
-        modulesRoot: root,
-        modules: [
-          // The entry module must come first.
-          { type: "ESModule", path: path.join(root, "index.js") },
-          ...files
-            .filter((file) => /\.m?js$/.test(file) && file !== "index.js")
-            .map((file) => ({ type: "ESModule", path: path.join(root, file) })),
-        ],
-        compatibilityDate: config.compatibility_date,
-        compatibilityFlags: config.compatibility_flags,
-        serviceBindings: {
-          ASSETS: () => new Response("Not found", { status: 404 }),
-        },
-        outboundService: (request) => upstreamHandler(request),
-      }],
-    }));
-    await worker.ready;
-    return worker;
-  })();
-  return workerPromise;
-}
-
-// Dispose even when startup failed, or the workerd process keeps the run alive.
-after(async () => {
-  await worker?.dispose();
-});
-
-async function fetchWorker(request) {
-  const worker = await loadWorker();
-  return worker.dispatchFetch(request.url, {
-    method: request.method,
-    headers: request.headers,
-    body: request.body ? await request.text() : undefined,
-  });
-}
-
-function mockUpstream(implementation) {
-  const handler = mock.fn(implementation);
-  upstreamHandler = handler;
-  return handler;
-}
+import { test } from "node:test";
+import { fetchWorker, mockUpstream, translationRequest } from "./helpers/worker.mjs";
 
 test("server renders the subtitle studio", async () => {
   const response = await fetchWorker(new Request("http://localhost/", {
@@ -82,16 +17,7 @@ test("server renders the subtitle studio", async () => {
   assert.doesNotMatch(html, /codex-preview|react-loading-skeleton/i);
 });
 
-function translationRequest(body) {
-  return new Request("http://localhost/api/translate", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: typeof body === "string" ? body : JSON.stringify(body),
-  });
-}
-
 test("production translation route rejects invalid input without contacting the provider", async () => {
-  await loadWorker();
   const upstream = mockUpstream(() => {
     throw new Error("Invalid input must not trigger an upstream request");
   });
@@ -113,7 +39,6 @@ test("production translation route rejects invalid input without contacting the 
 });
 
 test("production translation route preserves valid overlong results and does not expose the key", async () => {
-  await loadWorker();
   const translation = "这是长度超过建议但仍然有效的中文字幕。".repeat(3);
   const upstream = mockUpstream(async (request) => {
     assert.equal(request.url, "https://api.deepseek.com/chat/completions");
@@ -136,7 +61,6 @@ test("production translation route preserves valid overlong results and does not
 });
 
 test("production translation route reports rejected credentials without retrying or caching", async () => {
-  await loadWorker();
   const upstream = mockUpstream(async () => Response.json({
     error: { message: "invalid credentials" },
   }, { status: 401 }));
