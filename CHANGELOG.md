@@ -15,6 +15,7 @@
 - 统一 npm、Node.js、编辑器和 Git 换行配置，排除临时文件与构建产物
 - 增加本地提交/推送检查、GitHub CI、PR 与问题模板、维护者规则及 Dependabot 更新
 - 补充开发、版本发布、安全报告与回滚流程；版本标签经过完整检查后创建 GitHub Release
+- 移除未使用的数据库（D1 / Drizzle）、图片优化接口和示例代码，减少依赖
 - 升级 vinext 1.2 与 ESLint 10；页面与翻译接口的运行测试改在 Cloudflare workerd 运行时中执行，与线上环境一致
 
 ## v0.4.0 — 2026-10-08
