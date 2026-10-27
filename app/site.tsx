@@ -116,9 +116,12 @@ const STEPS = [
 
 export function Steps() {
   return (
-    <section id="how" className="site-section" aria-labelledby="how-title">
-      <p className="eyebrow">使用方法</p>
-      <h2 id="how-title">三步完成。</h2>
+    <section id="how" className="site-section how" aria-labelledby="how-title">
+      <div className="how-head">
+        <p className="eyebrow">使用方法</p>
+        <h2 id="how-title">三步完成。</h2>
+        <p className="how-lead">从拖进字幕，到放进剪辑软件的字幕轨。</p>
+      </div>
       <ol className="steps">
         {STEPS.map((step, index) => (
           <li key={step.title}>
