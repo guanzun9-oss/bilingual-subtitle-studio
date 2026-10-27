@@ -1,6 +1,6 @@
 # Cuewise 字幕匠
 
-![Version](https://img.shields.io/badge/version-0.5.0-2563eb)
+![Version](https://img.shields.io/badge/version-0.6.0-2563eb)
 
 ![Cuewise 字幕匠](./public/og-v2.png)
 
@@ -66,7 +66,7 @@ Cuewise 在每个原字幕条目内整理断句，用原条目文本作为翻译
 
 ## 当前版本
 
-当前版本 `v0.5.0`：同时翻译 3 批并支持人名与术语表；翻译进度自动保存在本机浏览器，刷新或改设置都不会丢失译文；长字幕编辑更流畅。
+当前版本 `v0.6.0`：更名为 Cuewise 字幕匠，全新产品网站与工作台；新增字幕轨道图、条目筛选与快捷键，演示无需 API Key。
 完整记录见 [CHANGELOG.md](./CHANGELOG.md)。
 
 ## 质量与限制
