@@ -13,20 +13,22 @@ export async function generateMetadata(): Promise<Metadata> {
     (host.startsWith("localhost") ? "http" : "https");
   const imageUrl = `${protocol}://${host}/og-v2.png`;
 
+  const description = "将 Buzz 识别的英文字幕整理为自然断句、逐条对齐的中英双语 SRT，时间轴与原字幕一致，可直接导入达芬奇与 Premiere Pro。";
+
   return {
-    title: "双语字幕工坊｜英文 SRT 转中英双语字幕",
-    description:
-      "无需安装或登录，上传英文 SRT，用 DeepSeek 生成自然对齐的中英双语字幕。",
+    title: "Cuewise 字幕匠｜英文字幕转中英双语 SRT",
+    description,
+    icons: { icon: "/favicon.svg" },
     openGraph: {
-      title: "双语字幕工坊",
-      description: "保留原字幕边界、句末拆分、自动重试，让中英文自然对齐。",
+      title: "Cuewise 字幕匠",
+      description,
       type: "website",
       images: [{ url: imageUrl, width: 1792, height: 909 }],
     },
     twitter: {
       card: "summary_large_image",
-      title: "双语字幕工坊",
-      description: "保留原字幕边界、句末拆分、自动重试，让中英文自然对齐。",
+      title: "Cuewise 字幕匠",
+      description,
       images: [imageUrl],
     },
   };

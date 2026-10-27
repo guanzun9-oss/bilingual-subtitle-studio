@@ -1,8 +1,8 @@
-# 双语字幕工坊 · Bilingual Subtitle Studio
+# Cuewise 字幕匠
 
 ![Version](https://img.shields.io/badge/version-0.5.0-2563eb)
 
-![双语字幕工坊 · Bilingual Subtitle Studio](./public/og-v2.png)
+![Cuewise 字幕匠](./public/og-v2.png)
 
 一个面向 Buzz 英文识别字幕的中英双语 SRT 整理工具。它以 Buzz 导出的原始
 字幕条目为边界，只拆分、不合并：句末标点后另起一条，超长句再按自然停顿
@@ -29,7 +29,7 @@ Buzz 导出的英文 SRT 经常按照识别时间切成很短的片段。直接�
 - 单条字幕过长，画面上阅读体验不佳
 - 网络或模型响应异常后，整批翻译需要重新开始
 
-双语字幕工坊在每个原字幕条目内整理断句，用原条目文本作为翻译上下文，保持
+Cuewise 在每个原字幕条目内整理断句，用原条目文本作为翻译上下文，保持
 中英文逐条对应，并在翻译中断时保留已经完成的进度。
 
 ## 主要功能

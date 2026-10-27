@@ -480,7 +480,7 @@ export default function SubtitleTool() {
       setStatus("ready");
       setMessage(
         !persist
-          ? "这是演示字幕，译文是示例。导入你自己的 SRT 并填写 Key 即可正式翻译。"
+          ? "当前为演示字幕，译文为示例。导入你的 SRT 并填写 API Key，即可正式翻译。"
           : restoredCount ? `已恢复上次保存的 ${restoredCount} 条译文。` : "",
       );
     } catch (error) {
@@ -534,7 +534,7 @@ export default function SubtitleTool() {
     }
     if (!apiKey.trim()) {
       setStatus("error");
-      setMessage("先在「翻译引擎」里填写 DeepSeek API Key，没有的话点「获取 Key」申请。");
+      setMessage("请先在「翻译引擎」中填写 DeepSeek API Key；如尚未申请，可点击「获取 Key」。");
       keyInputRef.current?.focus();
       keyInputRef.current?.scrollIntoView({ block: "center" });
       setKeyAttention(true);
@@ -686,7 +686,7 @@ export default function SubtitleTool() {
     anchor.click();
     // Safari can cancel the download if the URL is revoked in the same task.
     setTimeout(() => URL.revokeObjectURL(url), 1_000);
-    setToast(`已生成${bilingual ? "双语" : "英文"} SRT · UTF-8 BOM · CRLF，开始下载`);
+    setToast(`已生成${bilingual ? "中英双语" : "英文"} SRT（UTF-8 BOM · CRLF），开始下载`);
     setTimeout(() => setToast(""), 3_000);
     if (bilingual && overlongCount) {
       setStatus("done");
@@ -703,8 +703,8 @@ export default function SubtitleTool() {
       <header className="studio-head">
         <div>
           <p className="eyebrow">工作台</p>
-          <h2 id="studio-title">开始制作你的双语字幕</h2>
-          <p className="mobile-tip">逐条校对建议在电脑上进行；手机适合查看进度和小改。</p>
+          <h2 id="studio-title">开始制作双语字幕</h2>
+          <p className="mobile-tip">逐条校对建议在电脑上完成；手机端适合查看进度与少量修改。</p>
         </div>
         <dl className="telemetry" aria-label="当前任务概况">
           <div><dt>原字幕</dt><dd>{sourceCues.length || "—"}</dd></div>
@@ -767,7 +767,7 @@ export default function SubtitleTool() {
                   </div>
                 </div>
               )}
-              {!sourceCues.length && <button className="ghost-button demo-button" type="button" onClick={() => void loadText(SAMPLE_SRT, "演示字幕.srt", false)}>试用演示字幕</button>}
+              {!sourceCues.length && <button className="ghost-button demo-button" type="button" onClick={() => void loadText(SAMPLE_SRT, "演示字幕.srt", false)}>观看演示</button>}
             </section>
 
             <section className="module">
@@ -839,7 +839,7 @@ export default function SubtitleTool() {
                 </div>
                 <p className="key-note">
                   <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4.5 7V5a3.5 3.5 0 0 1 7 0v2" fill="none" stroke="currentColor" strokeWidth="1.5" /><rect x="3" y="7" width="10" height="7.5" rx="2" fill="currentColor" /></svg>
-                  Key 默认不保存；勾选后只存在这台电脑的浏览器里。翻译时经本站转发给 DeepSeek，本站不保存。
+                  API Key 默认不保存；勾选后仅存于本机浏览器。翻译时经本站转发至 DeepSeek，本站不做保存。
                 </p>
                 <div className="field">
                   <span className="field-label" id="model-label">模型</span>
@@ -963,11 +963,11 @@ export default function SubtitleTool() {
           ) : (
             <div className="empty-bench">
               <LogoMark className="hero-mark" />
-              <p>把英文字幕拖到这里</p>
-              <span>支持 Buzz 导出的 .srt 文件，也可以先用演示字幕看看效果。</span>
+              <p>将英文字幕拖放到此处</p>
+              <span>支持 Buzz 导出的 SRT 文件；也可以先观看演示效果。</span>
               <div className="hero-actions">
                 <button className="primary-button" type="button" disabled={editing} onClick={() => fileInputRef.current?.click()}>选择 SRT 文件</button>
-                <button className="ghost-button" type="button" data-demo onClick={() => void loadText(SAMPLE_SRT, "演示字幕.srt", false)}>试用演示字幕（不用 Key）›</button>
+                <button className="ghost-button" type="button" data-demo onClick={() => void loadText(SAMPLE_SRT, "演示字幕.srt", false)}>观看演示（无需 API Key）›</button>
               </div>
             </div>
           )}

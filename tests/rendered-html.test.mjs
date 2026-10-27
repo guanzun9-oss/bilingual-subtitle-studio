@@ -11,7 +11,8 @@ test("server renders the subtitle studio", async () => {
 
   const html = await response.text();
   assert.match(html, /<html lang="zh-CN">/i);
-  assert.match(html, /双语字幕工坊/);
+  assert.match(html, /Cuewise/);
+  assert.match(html, /字幕匠/);
   assert.match(html, /字幕预览/);
   assert.match(html, /DeepSeek/);
   assert.doesNotMatch(html, /codex-preview|react-loading-skeleton/i);

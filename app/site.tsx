@@ -1,17 +1,16 @@
-import LogoMark from "./logo-mark";
+import { Wordmark } from "./logo-mark";
 
 const REPO = "https://github.com/guanzun9-oss/bilingual-subtitle-studio";
 
 export function SiteNav() {
   return (
     <header className="site-nav">
-      <a className="brand" href="#top" aria-label="双语字幕工坊 首页">
-        <LogoMark />
-        <strong>双语字幕工坊</strong>
+      <a className="brand" href="#top" aria-label="Cuewise 字幕匠 首页">
+        <Wordmark />
       </a>
       <nav aria-label="页面导航">
-        <a href="#why">为什么</a>
-        <a href="#how">使用方法</a>
+        <a href="#why">设计原则</a>
+        <a href="#how">工作流程</a>
         <a href="#faq">常见问题</a>
         <a href={REPO} target="_blank" rel="noreferrer">GitHub</a>
       </nav>
@@ -35,26 +34,27 @@ const OUTPUT_CUES = [
 export function Hero() {
   return (
     <section id="top" className="hero" aria-labelledby="hero-title">
-      <p className="eyebrow">Buzz 英文 SRT → 中英双语 SRT</p>
-      <h1 id="hero-title">英文字幕，一步变双语。</h1>
+      <p className="eyebrow">为字幕剪辑而生的双语翻译工具</p>
+      <h1 id="hero-title">让每一条字幕，都恰到好处。</h1>
       <p className="hero-lead">
-        把 Buzz 识别出的英文字幕拖进来：按句拆条，时间轴不越界，逐条译成中文。<br />
-        导出后直接放进达芬奇或 Premiere 的字幕轨。
+        Cuewise 将 Buzz 识别的英文字幕整理为自然断句、逐条对齐的中英双语 SRT。<br />
+        时间轴与原字幕分毫不差，导入达芬奇与 Premiere Pro 即可使用。
       </p>
       <div className="hero-actions">
         <a className="primary-button" href="#studio">开始制作</a>
-        <a className="text-link" href="#demo">先看演示，不用 Key ›</a>
+        <a className="text-link" href="#demo">观看演示 ›</a>
       </div>
+      <p className="hero-meta">免费使用 · 无需注册 · 演示无需 API Key</p>
 
       <figure className="before-after" aria-label="同一条字幕处理前后对比">
         <div className="srt-pane">
-          <p className="pane-label">Buzz 导出的原字幕</p>
+          <p className="pane-label">原始字幕 · Buzz 导出</p>
           <pre className="srt-text"><span className="srt-meta">{RAW_CUE.index}{"\n"}{RAW_CUE.time}</span>{"\n"}{RAW_CUE.text}</pre>
-          <p className="pane-note">一条 7.6 秒，一整句长话挤在一起</p>
+          <p className="pane-note">单条 7.6 秒，整句堆叠在一起，难以阅读</p>
         </div>
         <span className="pane-arrow" aria-hidden="true">→</span>
         <div className="srt-pane result">
-          <p className="pane-label">导出的双语 SRT</p>
+          <p className="pane-label">Cuewise 输出 · 中英双语</p>
           <pre className="srt-text">
             {OUTPUT_CUES.map((cue, index) => (
               <span key={cue.time} className="srt-cue">
@@ -63,43 +63,43 @@ export function Hero() {
               </span>
             ))}
           </pre>
-          <p className="pane-note">在自然停顿处拆成 3 条，首尾时间仍是 00:01,000 与 00:08,600</p>
+          <p className="pane-note">在语义停顿处拆分为 3 条，首尾时间与原字幕完全一致</p>
         </div>
       </figure>
     </section>
   );
 }
 
-const PROBLEMS = [
+const PRINCIPLES = [
   {
-    topic: "断句",
-    usual: "相邻的短条被合并成整句再翻译，时间轴跟着变，导入后和口型对不上。",
-    here: "Buzz 原条目只拆不合。句号、问号后另起一条，拆出的时间落在原条目之内，首尾时间不变。",
+    topic: "时间轴",
+    usual: "为了方便翻译而合并相邻字幕，时间轴随之改变，与口型和画面错位。",
+    here: "严格保留原始条目，只拆分、不合并。拆分点落在句末或语义停顿处，新条目的时间始终位于原条目之内。",
   },
   {
-    topic: "对齐",
-    usual: "整段送去翻译再按行数切回，下一句的意思常被提前翻进上一条。",
-    here: "每条单独翻译，只拿所属原条目当上下文。模型漏掉的条目单独补问，偏长的译文只提示、不丢弃。",
+    topic: "语义对齐",
+    usual: "整段翻译后再按行数切回，下一句的含义被提前带入上一条字幕。",
+    here: "逐条翻译，仅以所属原条目作为语境。遗漏的条目单独补译；偏长的译文只作提示，绝不丢弃。",
   },
   {
-    topic: "译名",
-    usual: "分批翻译后，同一个人名前后出现两三种译法，最后只能逐条搜索替换。",
-    here: "填一张人名与术语表，比如 Zane = 赞恩，每一批都按表翻译。",
+    topic: "译名一致",
+    usual: "分批翻译后，同一人名或术语在全片出现多种译法，只能逐条排查替换。",
+    here: "通过人名与术语表锁定译法，例如 Zane = 赞恩，每一批翻译都严格遵循。",
   },
 ];
 
 export function Why() {
   return (
     <section id="why" className="site-section" aria-labelledby="why-title">
-      <p className="eyebrow">为什么</p>
-      <h2 id="why-title">字幕翻译最容易出错的三个地方。</h2>
+      <p className="eyebrow">设计原则</p>
+      <h2 id="why-title">专业字幕的三条底线。</h2>
       <div className="problem-list">
-        {PROBLEMS.map((problem) => (
-          <article key={problem.topic} className="problem">
-            <h3>{problem.topic}</h3>
+        {PRINCIPLES.map((item) => (
+          <article key={item.topic} className="problem">
+            <h3>{item.topic}</h3>
             <div>
-              <p className="problem-usual"><span>常见做法</span>{problem.usual}</p>
-              <p className="problem-here"><span>这里</span>{problem.here}</p>
+              <p className="problem-usual"><span>常见做法</span>{item.usual}</p>
+              <p className="problem-here"><span>Cuewise 的做法</span>{item.here}</p>
             </div>
           </article>
         ))}
@@ -109,18 +109,27 @@ export function Why() {
 }
 
 const STEPS = [
-  { title: "导入", body: "把 Buzz 导出的英文 .srt 拖进工作台，选好剪辑软件和横竖屏。" },
-  { title: "翻译、校对", body: "填 DeepSeek Key 开始翻译。用「需检查」筛出读不完、显示太短的条目，⌘/Ctrl + ↑↓ 逐条改。" },
-  { title: "导出", body: "下载双语 SRT（UTF-8 BOM、CRLF），拖进达芬奇媒体池或 Premiere 的字幕轨。" },
+  {
+    title: "导入",
+    body: "导入 Buzz 导出的英文 SRT，选择目标剪辑软件与画幅，断句与排版即时完成。",
+  },
+  {
+    title: "翻译与校对",
+    body: "使用你自己的 DeepSeek API Key 多批并行翻译。借助「需检查」筛选与字幕轨道图定位问题条目，以 ⌘/Ctrl + ↑↓ 逐条精修。",
+  },
+  {
+    title: "导出",
+    body: "导出 UTF-8 BOM 编码的中英双语 SRT，直接导入达芬奇媒体池或 Premiere Pro 字幕轨道。",
+  },
 ];
 
 export function Steps() {
   return (
     <section id="how" className="site-section how" aria-labelledby="how-title">
       <div className="how-head">
-        <p className="eyebrow">使用方法</p>
-        <h2 id="how-title">三步完成。</h2>
-        <p className="how-lead">从拖进字幕，到放进剪辑软件的字幕轨。</p>
+        <p className="eyebrow">工作流程</p>
+        <h2 id="how-title">三步，从识别稿到成片字幕。</h2>
+        <p className="how-lead">无需安装与注册，在浏览器中即可完成全部流程。</p>
       </div>
       <ol className="steps">
         {STEPS.map((step, index) => (
@@ -137,24 +146,24 @@ export function Steps() {
 
 const QUESTIONS = [
   {
-    question: "要花钱吗？",
-    answer: "工具本身免费。翻译走你自己的 DeepSeek 账户，按 DeepSeek 的价格计费，费用取决于台词量和所选模型。",
+    question: "使用 Cuewise 需要付费吗？",
+    answer: "Cuewise 本身完全免费。翻译通过你自己的 DeepSeek 账户调用，按 DeepSeek 官方价格计费，费用取决于台词量与所选模型。",
   },
   {
-    question: "导入达芬奇后中英文怎么排？",
-    answer: "每条导出为「中文一行 + 英文一行」，只有超长时才换行，中文在上或英文在上可选。字体、字号、描边和位置在达芬奇的字幕轨道 Inspector 或 Premiere 的 Track Style 里统一设置。",
+    question: "导入剪辑软件后，中英文如何排版？",
+    answer: "每条字幕导出为中文、英文各一行，仅在超出行宽时换行，并可选择中文或英文在上。字体、字号、描边与位置，请在达芬奇的字幕轨道检查器或 Premiere Pro 的轨道样式中统一设置。",
   },
   {
-    question: "Key 和字幕会被保存吗？",
-    answer: "字幕原文和翻译进度只保存在你的浏览器里。翻译时，字幕文本和 Key 经本站服务器转发给 DeepSeek，本站不保存。Key 默认不记住；勾选「记住」后只存在这台电脑的浏览器里，随时可以一键清除。",
+    question: "我的字幕与 API Key 是否安全？",
+    answer: "字幕原文与翻译进度仅保存在你的浏览器中。翻译时，字幕文本与 API Key 经由本站服务器转发至 DeepSeek，本站不做任何保存。API Key 默认不会被记住；勾选「记住」后仅存于本机浏览器，并可随时一键清除。",
   },
   {
-    question: "翻到一半断了怎么办？",
-    answer: "已经译好的条目不会丢。点「继续任务」从断点接着翻；关掉页面也没关系，下次打开从「上次的任务」继续。",
+    question: "翻译中断后如何继续？",
+    answer: "已完成的译文会被完整保留。点击「继续任务」即可从中断处恢复；即使关闭页面，下次打开时也可以从「上次的任务」继续。",
   },
   {
-    question: "能直接交付吗？",
-    answer: "断句和翻译只看得到文字，看不到画面、听不到声音。导入剪辑软件后，请对照视频完整过一遍再交付。",
+    question: "导出的字幕可以直接交付吗？",
+    answer: "Cuewise 基于文本进行断句与翻译，无法感知画面与声音。建议导入剪辑软件后对照视频完整审看，再行交付。",
   },
 ];
 
@@ -162,7 +171,7 @@ export function Faq() {
   return (
     <section id="faq" className="site-section faq" aria-labelledby="faq-title">
       <p className="eyebrow">常见问题</p>
-      <h2 id="faq-title">开始之前。</h2>
+      <h2 id="faq-title">你可能想了解的。</h2>
       <div className="faq-list">
         {QUESTIONS.map((item) => (
           <details key={item.question}>
@@ -179,10 +188,12 @@ export function SiteFooter() {
   return (
     <footer className="site-footer">
       <div className="footer-row">
-        <a className="brand" href="#top">
-          <LogoMark />
-          <strong>双语字幕工坊</strong>
-        </a>
+        <div className="footer-brand">
+          <a className="brand" href="#top" aria-label="Cuewise 字幕匠 首页">
+            <Wordmark />
+          </a>
+          <p>为字幕剪辑而生的双语翻译工具。</p>
+        </div>
         <nav aria-label="项目链接">
           <a href={REPO} target="_blank" rel="noreferrer">GitHub</a>
           <a href={`${REPO}/releases`} target="_blank" rel="noreferrer">更新日志</a>
@@ -191,7 +202,7 @@ export function SiteFooter() {
         </nav>
       </div>
       <p className="footer-legal">
-        字幕原文和翻译进度只保存在你的浏览器中。翻译时，字幕文本和 API Key 经本站服务器转发给 DeepSeek，本站不保存。
+        © 2026 Cuewise 字幕匠。字幕原文与翻译进度仅保存在你的浏览器中；翻译请求经本站转发至 DeepSeek，本站不做保存。
       </p>
     </footer>
   );
