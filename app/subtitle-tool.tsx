@@ -11,6 +11,7 @@ import {
   tidyCues,
   wrapChineseSubtitle,
 } from "@/lib/srt-core.mjs";
+import LogoMark from "./logo-mark";
 import { parseGlossary } from "@/lib/glossary.mjs";
 import { EDITOR_PROFILES, exportFileName, getSubtitleProfile } from "@/lib/subtitle-profiles.mjs";
 import {
@@ -246,16 +247,6 @@ const SignalTrack = memo(function SignalTrack({ cues, stateCodes, activeIndex, o
     </div>
   );
 });
-
-function LogoMark() {
-  return (
-    <svg className="logo-mark" viewBox="0 0 32 32" aria-hidden="true">
-      <rect x="1" y="1" width="30" height="30" rx="7" />
-      <path d="M6 13c3-5 5-5 8 0s5 5 8 0 4-4 4-4" />
-      <path d="M6 21h9M18 21h8" />
-    </svg>
-  );
-}
 
 export default function SubtitleTool() {
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -662,14 +653,11 @@ export default function SubtitleTool() {
   const pendingCount = tidy.length - translatedCount;
 
   return (
-    <main id="top" className="lab">
-      <header className="lab-header">
-        <div className="brand">
-          <LogoMark />
-          <div>
-            <h1>双语字幕工坊</h1>
-            <p>BILINGUAL SUBTITLE LAB</p>
-          </div>
+    <section id="studio" className={`studio ${sourceCues.length ? "has-file" : ""}`} aria-labelledby="studio-title">
+      <header className="studio-head">
+        <div>
+          <p className="eyebrow">工作台</p>
+          <h2 id="studio-title">开始制作你的双语字幕</h2>
         </div>
         <dl className="telemetry" aria-label="当前任务概况">
           <div><dt>原字幕</dt><dd>{sourceCues.length || "—"}</dd></div>
@@ -684,7 +672,7 @@ export default function SubtitleTool() {
         <aside className="rack" aria-label="字幕制作设置">
           <div className="rack-modules">
             <section className="module">
-              <h2><span className="module-index">01</span>导入字幕<small>SOURCE</small></h2>
+              <h2><span className="module-index">01</span>导入字幕</h2>
               <div
                 className={`drop-zone ${dragging ? "dragging" : ""} ${sourceCues.length ? "has-file" : ""}`}
                 onDragEnter={(event) => { event.preventDefault(); setDragging(true); }}
@@ -736,7 +724,7 @@ export default function SubtitleTool() {
             </section>
 
             <section className="module">
-              <h2><span className="module-index">02</span>断句与排版<small>SEGMENT</small></h2>
+              <h2><span className="module-index">02</span>断句与排版</h2>
               <fieldset disabled={editing}>
                 <div className="field">
                   <span className="field-label" id="editor-label">导入平台</span>
@@ -789,7 +777,7 @@ export default function SubtitleTool() {
             </section>
 
             <section className="module">
-              <h2><span className="module-index">03</span>翻译引擎<small>ENGINE</small><a href="https://platform.deepseek.com/api_keys" target="_blank" rel="noreferrer">获取 Key ↗</a></h2>
+              <h2><span className="module-index">03</span>翻译引擎<a href="https://platform.deepseek.com/api_keys" target="_blank" rel="noreferrer">获取 Key ↗</a></h2>
               <fieldset disabled={editing}>
                 <label className="field" htmlFor="api-key">
                   <span className="field-label">DeepSeek API Key</span>
@@ -920,20 +908,17 @@ export default function SubtitleTool() {
             </>
           ) : (
             <div className="empty-bench">
-              <svg className="empty-wave" viewBox="0 0 400 80" aria-hidden="true">
-                <path d="M0 40 Q 25 10 50 40 T 100 40 T 150 40 T 200 40 T 250 40 T 300 40 T 350 40 T 400 40" />
-                <path d="M0 40 Q 25 60 50 40 T 100 40 T 150 40 T 200 40 T 250 40 T 300 40 T 350 40 T 400 40" />
-              </svg>
-              <p>等待字幕信号</p>
-              <span>导入 Buzz 导出的英文 SRT，或试用演示字幕</span>
+              <LogoMark className="hero-mark" gradientId="studio-mark" />
+              <p>把英文字幕拖到这里</p>
+              <span>支持 Buzz 导出的 .srt 文件，也可以先用演示字幕看看效果。</span>
+              <div className="hero-actions">
+                <button className="primary-button" type="button" disabled={editing} onClick={() => fileInputRef.current?.click()}>选择 SRT 文件</button>
+                <button className="ghost-button" type="button" onClick={() => void loadText(SAMPLE_SRT, "演示字幕.srt", false)}>试用演示字幕 ›</button>
+              </div>
             </div>
           )}
         </section>
       </div>
-      <footer className="lab-footer">
-        <span>LOCAL-FIRST</span>
-        字幕和译文进度只保存在你的浏览器中，不上传本站服务器；API Key 仅在勾选后保存在本机。翻译由 DeepSeek 处理。
-      </footer>
-    </main>
+    </section>
   );
 }
