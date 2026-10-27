@@ -539,12 +539,13 @@ kbd { padding: 1px 6px; border-radius: 5px; background: var(--fill); font-family
     background: var(--nav);
     backdrop-filter: saturate(180%) blur(20px);
   }
-  .has-file .dock-readout { margin: 0; }
+  /* Row 1: progress bar. Row 2: percentage and action. Row 3: message. */
+  .has-file .dock-readout { grid-row: 2; grid-column: 1; margin: 0; }
   .has-file .dock-figure { min-width: 0; font-size: 24px; }
   .has-file .dock-readout > div { display: none; }
   .has-file .meter { grid-column: 1 / -1; grid-row: 1; height: 4px; }
-  .has-file .task-actions { margin: 0; }
-  .has-file .status-message { grid-column: 1 / -1; margin: 0; }
+  .has-file .task-actions { grid-row: 2; grid-column: 2; margin: 0; }
+  .has-file .status-message { grid-row: 3; grid-column: 1 / -1; margin: 0; }
   body:has(.studio.has-file) { padding-bottom: 120px; }
   /* Too tall to pin on a phone; the bottom dock carries the main action. */
   .bench-bar { position: static; padding: 18px 18px 16px; backdrop-filter: none; }
