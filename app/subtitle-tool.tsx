@@ -78,6 +78,17 @@ When we started this project, we thought the hardest part would be the technolog
 00:00:09,100 --> 00:00:14,800
 That changed everything. What should we do next? Let's find out!`;
 
+// Sample translations so the demo shows the whole flow without an API key.
+const DEMO_TRANSLATIONS: Record<string, string> = {
+  "When we started this project, we thought": "我们刚开始做这个项目时，以为",
+  "the hardest part would be the technology,": "最难的会是技术，",
+  "but it turned out to be understanding what people truly needed.": "结果最难的是理解大家真正需要什么。",
+  "When we started this project, we thought the hardest part would be the technology, but it turned out to be understanding what people truly needed.": "我们刚开始做这个项目时，以为最难的会是技术，结果最难的是理解大家真正需要什么。",
+  "That changed everything.": "这改变了一切。",
+  "What should we do next?": "接下来该做什么？",
+  "Let's find out!": "一起来看看吧！",
+};
+
 function formatDuration(ms: number) {
   const totalSeconds = Math.round(ms / 1000);
   const minutes = Math.floor(totalSeconds / 60);
@@ -273,6 +284,9 @@ export default function SubtitleTool() {
   const [rememberKey, setRememberKey] = useState(false);
   const [glossaryText, setGlossaryText] = useState("");
   const [filter, setFilter] = useState<Filter>("all");
+  const [toast, setToast] = useState("");
+  const [keyAttention, setKeyAttention] = useState(false);
+  const keyInputRef = useRef<HTMLInputElement>(null);
   // A row picked on the track may be hidden by the filter or not yet rendered;
   // scroll to it after the next render.
   const pendingScroll = useRef<number | null>(null);
@@ -377,6 +391,21 @@ export default function SubtitleTool() {
     [tidy, filter, activePreviewIndex, translations, cueWarnings],
   );
 
+  // The hero's "先看演示" link points at #demo: open the demo and show the studio.
+  useEffect(() => {
+    const openDemo = () => {
+      if (window.location.hash !== "#demo") return;
+      document.querySelector<HTMLButtonElement>("[data-demo]")?.click();
+      window.history.replaceState(null, "", "#studio");
+      // Jump once the demo has rendered; a smooth scroll is cancelled by the
+      // layout change while the cues appear.
+      setTimeout(() => document.getElementById("studio")?.scrollIntoView({ behavior: "instant" }), 50);
+    };
+    openDemo();
+    window.addEventListener("hashchange", openDemo);
+    return () => window.removeEventListener("hashchange", openDemo);
+  }, []);
+
   useEffect(() => {
     const index = pendingScroll.current;
     if (index === null) return;
@@ -431,6 +460,14 @@ export default function SubtitleTool() {
       const id = persist ? fingerprint(text) : null;
       const saved = id ? loadSession(browserStorage(), id) : null;
       const restored: Record<string, string> = saved?.translations ?? {};
+      if (!persist) {
+        // The demo arrives already translated, keyed for the current layout.
+        const pieces = tidyCues(cues, { maxChars, mode, lineChars: profile.englishLineChars }) as Cue[];
+        for (const piece of pieces) {
+          const sample = DEMO_TRANSLATIONS[piece.text.replace(/\n/g, " ")];
+          if (sample) restored[piece.key] = sample;
+        }
+      }
       const restoredCount = Object.values(restored).filter((value) => value.trim()).length;
       sourceTextRef.current = text;
       setSessionId(id);
@@ -441,7 +478,11 @@ export default function SubtitleTool() {
       // Names belong to a film: restore its list, or keep what was typed for a new file.
       if (saved) setGlossaryText(saved.glossary ?? "");
       setStatus("ready");
-      setMessage(restoredCount ? `已恢复上次保存的 ${restoredCount} 条译文。` : "");
+      setMessage(
+        !persist
+          ? "这是演示字幕，译文是示例。导入你自己的 SRT 并填写 Key 即可正式翻译。"
+          : restoredCount ? `已恢复上次保存的 ${restoredCount} 条译文。` : "",
+      );
     } catch (error) {
       setStatus("error");
       setMessage(error instanceof Error ? error.message : "字幕文件读取失败。");
@@ -493,7 +534,10 @@ export default function SubtitleTool() {
     }
     if (!apiKey.trim()) {
       setStatus("error");
-      setMessage("请填写 DeepSeek API Key。");
+      setMessage("先在「翻译引擎」里填写 DeepSeek API Key，没有的话点「获取 Key」申请。");
+      keyInputRef.current?.focus();
+      keyInputRef.current?.scrollIntoView({ block: "center" });
+      setKeyAttention(true);
       return;
     }
 
@@ -642,6 +686,8 @@ export default function SubtitleTool() {
     anchor.click();
     // Safari can cancel the download if the URL is revoked in the same task.
     setTimeout(() => URL.revokeObjectURL(url), 1_000);
+    setToast(`已生成${bilingual ? "双语" : "英文"} SRT · UTF-8 BOM · CRLF，开始下载`);
+    setTimeout(() => setToast(""), 3_000);
     if (bilingual && overlongCount) {
       setStatus("done");
       setMessage(`已导出；其中 ${overlongCount} 条偏长，建议播放时重点检查。`);
@@ -658,6 +704,7 @@ export default function SubtitleTool() {
         <div>
           <p className="eyebrow">工作台</p>
           <h2 id="studio-title">开始制作你的双语字幕</h2>
+          <p className="mobile-tip">逐条校对建议在电脑上进行；手机适合查看进度和小改。</p>
         </div>
         <dl className="telemetry" aria-label="当前任务概况">
           <div><dt>原字幕</dt><dd>{sourceCues.length || "—"}</dd></div>
@@ -781,12 +828,19 @@ export default function SubtitleTool() {
               <fieldset disabled={editing}>
                 <label className="field" htmlFor="api-key">
                   <span className="field-label">DeepSeek API Key</span>
-                  <input id="api-key" type="password" autoComplete="off" spellCheck="false" value={apiKey} placeholder="sk-…" onChange={(event) => setApiKey(event.target.value)} />
+                  <input ref={keyInputRef} id="api-key" className={keyAttention ? "attention" : ""} type="password" autoComplete="off" spellCheck="false" value={apiKey} placeholder="sk-…" onChange={(event) => { setApiKey(event.target.value); setKeyAttention(false); }} />
                 </label>
-                <label className="checkbox-field">
-                  <input type="checkbox" checked={rememberKey} onChange={(event) => setRememberKey(event.target.checked)} />
-                  在本机浏览器记住 Key
-                </label>
+                <div className="key-options">
+                  <label className="checkbox-field">
+                    <input type="checkbox" checked={rememberKey} onChange={(event) => setRememberKey(event.target.checked)} />
+                    在本机浏览器记住 Key
+                  </label>
+                  {apiKey && <button className="ghost-button" type="button" onClick={() => { setApiKey(""); setRememberKey(false); }}>清除 Key</button>}
+                </div>
+                <p className="key-note">
+                  <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4.5 7V5a3.5 3.5 0 0 1 7 0v2" fill="none" stroke="currentColor" strokeWidth="1.5" /><rect x="3" y="7" width="10" height="7.5" rx="2" fill="currentColor" /></svg>
+                  Key 默认不保存；勾选后只存在这台电脑的浏览器里。翻译时经本站转发给 DeepSeek，本站不保存。
+                </p>
                 <div className="field">
                   <span className="field-label" id="model-label">模型</span>
                   <div className="segmented" role="radiogroup" aria-labelledby="model-label">
@@ -908,17 +962,18 @@ export default function SubtitleTool() {
             </>
           ) : (
             <div className="empty-bench">
-              <LogoMark className="hero-mark" gradientId="studio-mark" />
+              <LogoMark className="hero-mark" />
               <p>把英文字幕拖到这里</p>
               <span>支持 Buzz 导出的 .srt 文件，也可以先用演示字幕看看效果。</span>
               <div className="hero-actions">
                 <button className="primary-button" type="button" disabled={editing} onClick={() => fileInputRef.current?.click()}>选择 SRT 文件</button>
-                <button className="ghost-button" type="button" onClick={() => void loadText(SAMPLE_SRT, "演示字幕.srt", false)}>试用演示字幕 ›</button>
+                <button className="ghost-button" type="button" data-demo onClick={() => void loadText(SAMPLE_SRT, "演示字幕.srt", false)}>试用演示字幕（不用 Key）›</button>
               </div>
             </div>
           )}
         </section>
       </div>
+      {toast && <div className="toast" role="status">{toast}</div>}
     </section>
   );
 }

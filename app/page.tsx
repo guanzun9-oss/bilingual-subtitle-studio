@@ -1,4 +1,4 @@
-import { Faq, Features, Hero, SiteFooter, SiteNav, Steps } from "./site";
+import { Faq, Hero, SiteFooter, SiteNav, Steps, Why } from "./site";
 import SubtitleTool from "./subtitle-tool";
 
 export default function Home() {
@@ -7,7 +7,7 @@ export default function Home() {
       <SiteNav />
       <main>
         <Hero />
-        <Features />
+        <Why />
         <Steps />
         <SubtitleTool />
         <Faq />
