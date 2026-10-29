@@ -152,6 +152,28 @@ type SubtitleRowProps = {
   onNavigate: (index: number, step: 1 | -1) => void;
 };
 
+// Scroll only the cue list on desktop: scrollIntoView would also move the page
+// and push the bench header out of view. On phones the list flows with the page.
+function revealRow(row: HTMLElement, block: "center" | "nearest", frames = 3) {
+  if (!row.isConnected) return;
+  const list = row.closest<HTMLElement>(".bench-body");
+  if (!list || list.scrollHeight <= list.clientHeight) {
+    // Not followed: the page scrolls smoothly and calling again would cut it short.
+    row.scrollIntoView({ block });
+    return;
+  }
+  const pinned = parseFloat(getComputedStyle(list).scrollPaddingTop) || 0;
+  const view = list.getBoundingClientRect();
+  const box = row.getBoundingClientRect();
+  const top = box.top - view.top + list.scrollTop;
+  if (block === "center") list.scrollTop = top - pinned - (list.clientHeight - pinned - box.height) / 2;
+  else if (box.top < view.top + pinned) list.scrollTop = top - pinned;
+  else if (box.bottom > view.bottom) list.scrollTop = top + box.height - list.clientHeight;
+  // Rows off screen have estimated heights (content-visibility) until they
+  // render, so the target moves once its neighbours appear; follow it briefly.
+  if (frames > 0) requestAnimationFrame(() => revealRow(row, block, frames - 1));
+}
+
 // Long films produce thousands of rows; typing in one must not re-render the rest.
 const SubtitleRow = memo(function SubtitleRow({
   cue,
@@ -290,6 +312,7 @@ export default function SubtitleTool() {
   // A row picked on the track may be hidden by the filter or not yet rendered;
   // scroll to it after the next render.
   const pendingScroll = useRef<number | null>(null);
+  const benchBodyRef = useRef<HTMLDivElement>(null);
   // Fingerprint of the loaded file; null for the demo, which is not saved.
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [lastSession, setLastSession] = useState<SavedSession | null>(null);
@@ -410,8 +433,21 @@ export default function SubtitleTool() {
     const index = pendingScroll.current;
     if (index === null) return;
     pendingScroll.current = null;
-    document.getElementById(`cue-row-${index}`)?.scrollIntoView({ block: "center" });
+    const row = document.getElementById(`cue-row-${index}`);
+    if (row) revealRow(row, "center");
   });
+
+  // The pinned track sits over the top of the cue list; tell the list how tall
+  // it is so rows scrolled into view are not hidden beneath it.
+  const hasCues = Boolean(previewCue);
+  useEffect(() => {
+    const body = benchBodyRef.current;
+    const instrument = body?.querySelector<HTMLElement>(".instrument");
+    if (!body || !instrument) return;
+    const observer = new ResizeObserver(() => body.style.setProperty("--instrument-height", `${instrument.offsetHeight}px`));
+    observer.observe(instrument);
+    return () => observer.disconnect();
+  }, [hasCues]);
 
   const translatedCount = useMemo(
     () => tidy.filter((cue) => translations[cue.id]?.trim()).length,
@@ -644,14 +680,14 @@ export default function SubtitleTool() {
     const shown = [...document.querySelectorAll<HTMLElement>("[data-cue-index]")];
     const target = shown[shown.findIndex((row) => Number(row.dataset.cueIndex) === index) + step];
     if (!target) return;
-    target.scrollIntoView({ block: "nearest" });
+    revealRow(target, "nearest");
     target.querySelector("textarea")?.focus({ preventScroll: true });
     setPreviewIndex(Number(target.dataset.cueIndex));
   }, []);
 
   const selectFromTrack = useCallback((index: number) => {
     const row = document.getElementById(`cue-row-${index}`);
-    if (row) row.scrollIntoView({ block: "center" });
+    if (row) revealRow(row, "center");
     else pendingScroll.current = index;
     setPreviewIndex(index);
     setFilter((current) => (current === "all" ? current : "all"));
@@ -916,7 +952,7 @@ export default function SubtitleTool() {
           </div>
 
           {previewCue ? (
-            <>
+            <div className="bench-body" ref={benchBodyRef}>
               <div className="instrument">
                 <SignalTrack cues={tidy} stateCodes={stateCodes} activeIndex={activePreviewIndex} onSelect={selectFromTrack} />
                 <div className="legend" aria-hidden="true">
@@ -959,7 +995,7 @@ export default function SubtitleTool() {
                 ))}
                 {!rows.length && <p className="list-empty">{filter === "pending" ? "没有未翻译的条目" : "没有需要检查的条目"}</p>}
               </div>
-            </>
+            </div>
           ) : (
             <div className="empty-bench">
               <LogoMark className="hero-mark" />
