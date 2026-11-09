@@ -120,6 +120,8 @@ DeepSeek Chat Completions API。
 
 开发分支、提交检查、PR 和依赖更新约定见 [CONTRIBUTING.md](./CONTRIBUTING.md)，
 版本发布与回滚见 [发布流程](./docs/releasing.md)。
+中国大陆访问的现状与绑定自有域名的方案见
+[中国大陆访问方案](./docs/mainland-china-access.md)。
 
 </details>
 
