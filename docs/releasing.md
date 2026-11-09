@@ -30,12 +30,12 @@ GitHub Release 创建成功后，由维护者执行部署。当前自动化不�
 
 ```bash
 npm ci
-npm run check
+CUSTOM_DOMAINS=cuewise.dpdns.org npm run check
 npx wrangler deploy --config dist/server/wrangler.json
 ```
 
-已绑定自定义域名时，`npm run check` 前设置 `CUSTOM_DOMAINS`（如 `CUSTOM_DOMAINS=sub.example.com npm run check`），否则生成的配置不含该域名，见 [中国大陆访问方案](./mainland-china-access.md)。部署前确认当前 checkout 为待上线标签，生成配置中的 Worker 名为 `bilingual-subtitle-studio`，且 Wrangler 登录的是正确账户。保存 GitHub Release、提交 SHA 和 Cloudflare deployment/version ID，便于追溯。
+生产环境已绑定自定义域名 `cuewise.dpdns.org`，`npm run check` 前需设置 `CUSTOM_DOMAINS=cuewise.dpdns.org`，否则生成的配置不含该域名，见 [中国大陆访问方案](./mainland-china-access.md)。部署前确认当前 checkout 为待上线标签，生成配置中的 Worker 名为 `bilingual-subtitle-studio`，且 Wrangler 登录的是正确账户。保存 GitHub Release、提交 SHA 和 Cloudflare deployment/version ID，便于追溯。
 
-上线后打开 [在线工具](https://bilingual-subtitle-studio.guanzun9-tools.workers.dev)，检查上传、断句、字幕布局和 SRT 下载；用维护者自己的 Key 做少量翻译，检查错误提示和继续任务。不把 Key 或字幕写入发布日志。
+上线后打开 [在线工具](https://cuewise.dpdns.org)，检查上传、断句、字幕布局和 SRT 下载；用维护者自己的 Key 做少量翻译，检查错误提示和继续任务。不把 Key 或字幕写入发布日志。
 
 如发生线上回归，在 Cloudflare Dashboard 的该 Worker 部署历史中恢复上一已验证版本，记录故障与回滚的 version ID。随后通过修复 PR 发布新版本。代码状态也需要回退时，使用 `git revert` 创建可审查的提交，保留发布历史。

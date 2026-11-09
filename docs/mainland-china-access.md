@@ -2,7 +2,7 @@
 
 ## 现状
 
-在线工具部署在 Cloudflare Workers，地址为 `bilingual-subtitle-studio.guanzun9-tools.workers.dev`。`*.workers.dev`（以及 `*.pages.dev`）在中国大陆长期受到 DNS 污染和 SNI 阻断，大陆用户不借助代理通常无法打开。
+在线工具部署在 Cloudflare Workers，默认地址为 `bilingual-subtitle-studio.guanzun9-tools.workers.dev`，现已按方案 A 绑定免费域名 `cuewise.dpdns.org`。`*.workers.dev`（以及 `*.pages.dev`）在中国大陆长期受到 DNS 污染和 SNI 阻断，大陆用户不借助代理通常无法打开。
 
 应用本身已经适合大陆访问，不需要改前端：
 
