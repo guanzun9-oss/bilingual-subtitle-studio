@@ -3,7 +3,7 @@
   "version": "0.6.1",
   "description": "Turn Buzz English SRT files into naturally segmented, time-aligned bilingual subtitles.",
   "private": true,
-  "homepage": "https://bilingual-subtitle-studio.guanzun9-tools.workers.dev",
+  "homepage": "https://cuewise.dpdns.org",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/guanzun9-oss/bilingual-subtitle-studio.git"
