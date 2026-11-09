@@ -14,14 +14,25 @@
 
 ## 方案 A：自有域名 + Cloudflare 自定义域名（推荐先做）
 
-不需要 ICP 备案（服务器在境外），不需要迁移代码，费用主要是域名（`.com` 约每年几十元人民币）。
+不需要 ICP 备案（服务器在境外），不需要迁移代码。域名可以先用免费的，之后再换成付费的（`.com` 约每年几十元人民币）。
 
-1. **购买域名**：任一注册商均可，优先选 `.com`、`.net` 等常见后缀；部分廉价后缀在大陆的可达性较差。在国内注册商购买需要完成实名认证。
+1. **取得域名**，任选一种：
+   - **免费**：用 GitHub 账号在 DigitalPlat FreeDomain 申请 `xxx.dpdns.org` 一类的免费域名。这类域名可能被平台收回或政策调整，也常被滥用而有被连带屏蔽的风险，适合先试用；申请前以其官网的当前规定为准。
+   - **付费**：任一注册商均可，优先选 `.com`、`.net` 等常见后缀；部分廉价后缀在大陆的可达性较差。在国内注册商购买需要完成实名认证。
 2. **托管到 Cloudflare**：在 Cloudflare Dashboard 添加站点（免费套餐即可），按提示把域名的 NS 服务器改成 Cloudflare 给出的两条，等待生效。
 3. **绑定到 Worker**：任选一种方式。
    - Dashboard：Workers & Pages → `bilingual-subtitle-studio` → Settings → Domains & Routes → Add → Custom domain，填写如 `sub.example.com`。
-   - 写进配置：在 `vite.config.ts` 的 `localBindingConfig` 中加入
-     `routes: [{ pattern: "sub.example.com", custom_domain: true }]`，构建后随 `dist/server/wrangler.json` 一起部署。这样域名配置有版本记录，推荐此方式。
+   - 随部署绑定（推荐）：构建时设置 `CUSTOM_DOMAINS`，构建会把它写进 `dist/server/wrangler.json`，`wrangler deploy` 时自动绑定并签发证书。多个域名用逗号分隔，只填域名本身：
+
+     ```bash
+     CUSTOM_DOMAINS=sub.example.com npm run check
+     ```
+
+     ```bash
+     npx wrangler deploy --config dist/server/wrangler.json
+     ```
+
+     域名需已在同一 Cloudflare 账户中生效；填写带 `https://`、路径、端口、通配符或 `workers.dev` 的值时构建会直接报错。
 4. **验证**：用多地拨测工具（如 ITDOG、站长工具的多地 Ping/HTTP 测试）从大陆各省和不同运营商访问新域名，确认页面、SRT 下载和翻译接口都正常。
 
 限制：Cloudflare 免费套餐在大陆没有节点，流量经境外节点回程，晚高峰可能较慢，个别地区或运营商偶有不稳定。对于本工具（页面轻量，主要耗时在翻译接口）通常够用。
@@ -48,7 +59,6 @@ Cloudflare 自身的中国网络（China Network）仅向企业版客户开放�
 
 ## 确定域名后需要同步修改的位置
 
-- `vite.config.ts`：`localBindingConfig` 增加 `routes`（见方案 A 第 3 步）；
 - `README.md`：“打开在线工具”链接；
 - `package.json`：`homepage`；
 - `docs/releasing.md`：上线后检查的在线工具链接；

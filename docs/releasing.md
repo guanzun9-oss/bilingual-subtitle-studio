@@ -34,7 +34,7 @@ npm run check
 npx wrangler deploy --config dist/server/wrangler.json
 ```
 
-部署前确认当前 checkout 为待上线标签，生成配置中的 Worker 名为 `bilingual-subtitle-studio`，且 Wrangler 登录的是正确账户。保存 GitHub Release、提交 SHA 和 Cloudflare deployment/version ID，便于追溯。
+已绑定自定义域名时，`npm run check` 前设置 `CUSTOM_DOMAINS`（如 `CUSTOM_DOMAINS=sub.example.com npm run check`），否则生成的配置不含该域名，见 [中国大陆访问方案](./mainland-china-access.md)。部署前确认当前 checkout 为待上线标签，生成配置中的 Worker 名为 `bilingual-subtitle-studio`，且 Wrangler 登录的是正确账户。保存 GitHub Release、提交 SHA 和 Cloudflare deployment/version ID，便于追溯。
 
 上线后打开 [在线工具](https://bilingual-subtitle-studio.guanzun9-tools.workers.dev)，检查上传、断句、字幕布局和 SRT 下载；用维护者自己的 Key 做少量翻译，检查错误提示和继续任务。不把 Key 或字幕写入发布日志。
 

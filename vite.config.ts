@@ -1,12 +1,18 @@
 import vinext from "vinext";
 import { defineConfig } from "vite";
+import { customDomainRoutes } from "./scripts/custom-domains.mjs";
 
 // macOS Seatbelt blocks FSEvents, so Codex previews need polling for HMR.
 const isCodexSeatbeltSandbox = process.env.CODEX_SANDBOX === "seatbelt";
 
+// Optional custom domains (see docs/mainland-china-access.md), written into the
+// generated dist/server/wrangler.json so `wrangler deploy` binds them.
+const routes = customDomainRoutes(process.env.CUSTOM_DOMAINS);
+
 const localBindingConfig = {
   main: "./worker/index.ts",
   compatibility_flags: ["nodejs_compat"],
+  ...(routes.length > 0 ? { routes } : {}),
 };
 
 export default defineConfig(async () => {

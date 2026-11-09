@@ -75,3 +75,16 @@ test("release validation rejects missing or empty release notes", (t) => {
   f.write("CHANGELOG.md", "# Changelog\n\n## v1.2.3 — 2026-10-15\n\n## v1.2.2 — 2026-10-01\n\n- Older change\n");
   assert.notEqual(f.node("release-notes").status, 0);
 });
+
+test("custom domains become Wrangler custom-domain routes", async () => {
+  const { customDomainRoutes } = await import("../scripts/custom-domains.mjs");
+  assert.deepEqual(customDomainRoutes(undefined), []);
+  assert.deepEqual(customDomainRoutes("  "), []);
+  assert.deepEqual(customDomainRoutes("Sub.Example.com, www.example.com sub.example.com"), [
+    { pattern: "sub.example.com", custom_domain: true },
+    { pattern: "www.example.com", custom_domain: true },
+  ]);
+  for (const bad of ["https://sub.example.com", "sub.example.com/app", "*.example.com", "example", "sub.example.com:8443", "app.guanzun9-tools.workers.dev"]) {
+    assert.throws(() => customDomainRoutes(bad), /CUSTOM_DOMAINS/, bad);
+  }
+});
