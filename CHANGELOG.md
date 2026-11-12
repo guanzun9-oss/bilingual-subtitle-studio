@@ -6,6 +6,10 @@
 
 - 在线工具启用新地址 [cuewise.dpdns.org](https://cuewise.dpdns.org)，避开 workers.dev 在中国大陆的屏蔽；原 workers.dev 地址保留给海外用户
 
+### 安全与工程
+
+- 例行依赖升级：Next.js 16.4.6、vinext 1.4.5、Vite 8.3.8、Wrangler 4.160.1、Tailwind CSS 4.3.5、ESLint 10.14.0 等；消除 Wrangler / Miniflare 旧版本带来的开发依赖安全告警（含 1 个高危），生产依赖保持零告警
+
 ## v0.6.1 — 2026-10-29
 
 ### 工作台
