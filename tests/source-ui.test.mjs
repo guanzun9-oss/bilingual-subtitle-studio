@@ -54,3 +54,13 @@ test("every interface language provides every message", async () => {
     assert.deepEqual(placeholders(text), placeholders(reference), locale);
   }
 });
+
+test("translations are kept per language pair and saved once", async () => {
+  const source = await readFile(sourceUrl, "utf8");
+
+  // Correcting the source language must not reuse work done under the old one.
+  assert.match(source, /pairKey\(sourceLanguage, targetLanguage\)/);
+  assert.doesNotMatch(source, /allTranslations\[targetLanguage\]/);
+  // The active pair is saved as `translations`, not again inside `byTarget`.
+  assert.match(source, /filter\(\(\[key\]\) => key !== currentPair\)/);
+});

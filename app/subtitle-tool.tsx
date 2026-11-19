@@ -65,6 +65,14 @@ type SavedSession = {
 
 type Profile = ReturnType<typeof getSubtitleProfile>;
 
+/**
+ * Translations belong to a language pair, not just a target: correcting the
+ * source language must not keep work done under the wrong one.
+ */
+function pairKey(source: string, target: string) {
+  return `${source}>${target}`;
+}
+
 const PROVIDER_CONFIG = PROVIDERS as Record<string, { label: string; keyUrl: string; keyHint: string; models: string[]; strictModels?: boolean }>;
 
 /** localStorage, or undefined where the browser blocks it (e.g. some private modes). */
@@ -315,9 +323,10 @@ export default function SubtitleTool({ t: messages, locale, defaultTarget }: Sub
   const [provider, setProvider] = useState<string>(locale.startsWith("zh") ? DEFAULT_PROVIDER : "openai");
   const [models, setModels] = useState<Record<string, string>>({});
   const [apiKeys, setApiKeys] = useState<Record<string, string>>({});
-  // Keyed by target language, then by cue text rather than position:
-  // changing the layout settings re-splits cues, and every piece whose text
-  // is unchanged keeps its work; switching language keeps the other's work.
+  // Keyed by language pair (see pairKey), then by cue text rather than
+  // position: changing the layout settings re-splits cues, and every piece
+  // whose text is unchanged keeps its work; switching languages keeps the
+  // other pair's work.
   const [allTranslations, setAllTranslations] = useState<Record<string, Translations>>({});
   const [status, setStatus] = useState<
     "idle" | "ready" | "translating" | "done" | "error"
@@ -345,7 +354,8 @@ export default function SubtitleTool({ t: messages, locale, defaultTarget }: Sub
   const providerConfig = PROVIDER_CONFIG[provider];
   const model = resolveModel(provider, models[provider]);
   const apiKey = apiKeys[provider] ?? "";
-  const translationsByKey = useMemo(() => allTranslations[targetLanguage] ?? {}, [allTranslations, targetLanguage]);
+  const currentPair = pairKey(sourceLanguage, targetLanguage);
+  const translationsByKey = useMemo(() => allTranslations[currentPair] ?? {}, [allTranslations, currentPair]);
   const sameLanguage = sourceLanguage === targetLanguage;
 
   useEffect(() => {
@@ -368,12 +378,14 @@ export default function SubtitleTool({ t: messages, locale, defaultTarget }: Sub
         translations: translationsByKey,
         target: targetLanguage,
         sourceLanguage,
-        byTarget: allTranslations,
+        // The current pair is already in `translations`; storing it twice
+        // could push a large file over the storage quota.
+        byTarget: Object.fromEntries(Object.entries(allTranslations).filter(([key]) => key !== currentPair)),
         glossary: glossaryText,
       });
     }, 500);
     return () => clearTimeout(timer);
-  }, [sessionId, sourceName, translationsByKey, targetLanguage, sourceLanguage, allTranslations, glossaryText]);
+  }, [sessionId, sourceName, translationsByKey, targetLanguage, sourceLanguage, allTranslations, currentPair, glossaryText]);
 
   useEffect(() => {
     // Restoring browser-only state has to wait until after hydration.
@@ -557,7 +569,11 @@ export default function SubtitleTool({ t: messages, locale, defaultTarget }: Sub
       let target = isLanguage(saved?.target) && saved.target !== source ? saved.target : targetLanguage;
       if (target === source) target = source === defaultTarget ? (source === "en" ? "zh-Hans" : "en") : defaultTarget;
       const restored: Record<string, Translations> = saved
-        ? { ...(saved.byTarget ?? {}), [saved.target ?? "zh-Hans"]: saved.translations }
+        // Sessions from before language choice were English to Simplified Chinese.
+        ? {
+            ...(saved.byTarget ?? {}),
+            [pairKey(saved.sourceLanguage ?? "en", saved.target ?? "zh-Hans")]: saved.translations,
+          }
         : {};
       let demoHasSample = true;
       if (!persist) {
@@ -570,9 +586,9 @@ export default function SubtitleTool({ t: messages, locale, defaultTarget }: Sub
           const sample = samples?.[piece.text.replace(/\n/g, " ")];
           if (sample) sampleByKey[piece.key] = sample;
         }
-        restored[target] = sampleByKey;
+        restored[pairKey(source, target)] = sampleByKey;
       }
-      const restoredCount = Object.values(restored[target] ?? {}).filter((value) => value.trim()).length;
+      const restoredCount = Object.values(restored[pairKey(source, target)] ?? {}).filter((value) => value.trim()).length;
       sourceTextRef.current = text;
       setSessionId(id);
       setSourceName(name);
@@ -629,7 +645,7 @@ export default function SubtitleTool({ t: messages, locale, defaultTarget }: Sub
   }
 
   function setTargetTranslations(update: (current: Translations) => Translations) {
-    setAllTranslations((all) => ({ ...all, [targetLanguage]: update(all[targetLanguage] ?? {}) }));
+    setAllTranslations((all) => ({ ...all, [currentPair]: update(all[currentPair] ?? {}) }));
   }
 
   async function translate(restart = false) {
@@ -669,8 +685,9 @@ export default function SubtitleTool({ t: messages, locale, defaultTarget }: Sub
         );
     if (restart) setTargetTranslations(() => ({}));
     const pending = tidy.filter((cue) => !nextTranslations[cue.id]?.trim());
-    // The target can change while a run is going; results belong to the one it started with.
+    // Languages can change while a run is going; results belong to the pair it started with.
     const runTarget = targetLanguage;
+    const runPair = currentPair;
 
     try {
       if (!pending.length) {
@@ -718,9 +735,9 @@ export default function SubtitleTool({ t: messages, locale, defaultTarget }: Sub
           onProgress: (received: Translations) => {
             Object.assign(nextTranslations, received);
             setAllTranslations((all) => {
-              const next = { ...(all[runTarget] ?? {}) };
+              const next = { ...(all[runPair] ?? {}) };
               for (const [id, text] of Object.entries(received)) next[keyById.get(id)!] = text;
-              return { ...all, [runTarget]: next };
+              return { ...all, [runPair]: next };
             });
           },
         },
@@ -757,8 +774,8 @@ export default function SubtitleTool({ t: messages, locale, defaultTarget }: Sub
   }
 
   const updateTranslation = useCallback((key: string, value: string) => {
-    setAllTranslations((all) => ({ ...all, [targetLanguage]: { ...(all[targetLanguage] ?? {}), [key]: value } }));
-  }, [targetLanguage]);
+    setAllTranslations((all) => ({ ...all, [currentPair]: { ...(all[currentPair] ?? {}), [key]: value } }));
+  }, [currentPair]);
 
   // ⌘/Ctrl + ↑/↓ moves between the rows currently shown, whatever the filter.
   const navigateFrom = useCallback((index: number, step: 1 | -1) => {

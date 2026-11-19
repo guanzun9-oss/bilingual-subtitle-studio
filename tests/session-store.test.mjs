@@ -135,14 +135,19 @@ test("a session keeps its own glossary", () => {
 
 test("sessions keep work for several target languages and their source language", () => {
   const storage = memoryStorage();
-  const byTarget = { ja: { "source-1|0|Hi.": "こんにちは。" }, es: { "source-1|0|Hi.": "Hola." } };
-  saveSession(storage, { id: "m", name: "m.srt", sourceText: "SRT", translations: byTarget.ja, target: "ja", sourceLanguage: "en", byTarget }, 5);
+  const japanese = { "source-1|0|Hi.": "こんにちは。" };
+  const byTarget = { "en>es": { "source-1|0|Hi.": "Hola." } };
+  saveSession(storage, { id: "m", name: "m.srt", sourceText: "SRT", translations: japanese, target: "ja", sourceLanguage: "en", byTarget }, 5);
   const session = loadSession(storage, "m");
   assert.equal(session.target, "ja");
   assert.equal(session.sourceLanguage, "en");
-  assert.deepEqual(session.translations, byTarget.ja);
+  assert.deepEqual(session.translations, japanese);
   assert.deepEqual(session.byTarget, byTarget);
   assert.equal(listSessions(storage)[0].translated, 1);
+
+  // Nothing extra is stored when no other pair has work.
+  saveSession(storage, { id: "n", name: "n.srt", sourceText: "SRT", translations: japanese, target: "ja", byTarget: { "en>es": {} } });
+  assert.equal("byTarget" in JSON.parse(storage.getItem("subtitle-studio:session:n")), false);
 
   storage.setItem("subtitle-studio:session:x", JSON.stringify({ id: "x", translations: {}, byTarget: { ja: { a: 1 } } }));
   assert.equal(loadSession(storage, "x"), null);
