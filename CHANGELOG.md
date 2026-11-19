@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v0.7.0 — 2026-11-19
+
 ### 访问
 
 - 在线工具启用新地址 [cuewise.dpdns.org](https://cuewise.dpdns.org)，避开 workers.dev 在中国大陆的屏蔽；原 workers.dev 地址保留给海外用户

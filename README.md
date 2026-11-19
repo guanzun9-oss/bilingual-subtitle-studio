@@ -1,6 +1,6 @@
 # Cuewise 字幕匠
 
-![Version](https://img.shields.io/badge/version-0.6.1-2563eb)
+![Version](https://img.shields.io/badge/version-0.7.0-2563eb)
 
 ![Cuewise 字幕匠](./public/og-v2.png)
 
@@ -79,7 +79,7 @@ Cuewise 在每个原字幕条目内整理断句，用原条目文本作为翻译
 
 ## 当前版本
 
-当前版本 `v0.6.1`：字幕很多时，电脑上的字幕列表在预览区内单独滚动，网页不再被拉得很长；点击轨道图跳转更准确。
+当前版本 `v0.7.0`：网站界面支持 11 种语言，原字幕与译文支持 24 种语言，翻译服务新增 OpenAI、Claude、Gemini、OpenRouter、通义千问、Kimi、智谱 GLM 和 Mistral。
 完整记录见 [CHANGELOG.md](./CHANGELOG.md)。
 
 ## 质量与限制
