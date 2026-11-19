@@ -1,9 +1,13 @@
+import Anthropic from "@anthropic-ai/sdk";
 import { NextResponse } from "next/server";
 import {
   MAX_GLOSSARY_ENTRIES,
   MAX_GLOSSARY_TERM_LENGTH,
   glossaryFor,
 } from "@/lib/glossary.mjs";
+import { getLanguage, isLanguage } from "@/lib/languages.mjs";
+import { DEFAULT_PROVIDER, PROVIDERS, isProvider, resolveModel } from "@/lib/providers.mjs";
+import { format, getMessages, type Messages } from "@/lib/i18n";
 
 export const runtime = "edge";
 
@@ -13,6 +17,9 @@ type TranslationItem = {
   context?: string;
   /** Text of the previous source cue, used where the batch does not show it. */
   before?: string;
+  /** Length target for the translation, in characters of the target language. */
+  maxChars?: number;
+  /** Older name of `maxChars`, from when every translation was Chinese. */
   maxChineseChars?: number;
 };
 
@@ -23,7 +30,26 @@ type ParsedTranslation = {
   text: string;
 };
 
-const ALLOWED_MODELS = new Set(["deepseek-v4-flash", "deepseek-v4-pro"]);
+type ProviderConfig = {
+  label: string;
+  kind: "openai" | "anthropic";
+  url?: string;
+  models: string[];
+  extra?: Record<string, unknown>;
+  maxTokens?: number;
+  maxTokensField?: string;
+  jsonMode?: boolean;
+};
+
+type Job = {
+  provider: string;
+  config: ProviderConfig;
+  apiKey: string;
+  model: string;
+  system: string;
+  user: string;
+  text: Messages["api"];
+};
 
 class ApiError extends Error {
   status: number;
@@ -107,10 +133,140 @@ function normalizeTranslations(
   return result;
 }
 
-async function requestDeepSeek(
-  apiKey: string,
-  model: string,
-  items: TranslationItem[],
+/** Instructions for one language pair. Written in English, which every provider follows well. */
+function systemPrompt(sourceCode: string, targetCode: string, kind: ProviderConfig["kind"]) {
+  const source = getLanguage(sourceCode).english;
+  const target = getLanguage(targetCode).english;
+  const output = kind === "anthropic"
+    ? '{"translations":[{"id":"s0","text":"translation"}]}'
+    : '{"translations":{"s0":"translation"}}';
+  return [
+    `You are a professional film and video subtitle translator from ${source} into ${target}.`,
+    'Input JSON: "c" is an array of shared context strings and "s" lists the items.',
+    'For each item, "t" is the only text to translate. "c" indexes the original subtitle it was cut from and "b" the previous subtitle; both are context only and must never be translated into this item.',
+    `"m" is the maximum length of the translation in ${target} characters, punctuation included. "g" is a glossary (source term: required translation) that must be used.`,
+    "Translate item by item: never move, merge or add content from neighbouring items.",
+    `Write natural, concise, spoken ${target} on a single line, keep names, terms and tone, and stay within "m" without losing essential meaning.`,
+    `Return only a JSON object ${output} containing every id exactly once.`,
+  ].join(" ");
+}
+
+async function callOpenAiCompatible(job: Job) {
+  const { config } = job;
+  const response = await fetch(config.url!, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${job.apiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model: job.model,
+      // This is only an output ceiling, not a reserved-token charge. Keep
+      // enough headroom so a valid JSON response is not cut off mid-item.
+      [config.maxTokensField || "max_tokens"]: config.maxTokens || 4_000,
+      ...(config.jsonMode ? { response_format: { type: "json_object" } } : {}),
+      ...config.extra,
+      messages: [
+        { role: "system", content: job.system },
+        { role: "user", content: job.user },
+      ],
+    }),
+  });
+
+  if (!response.ok) {
+    let detail = "";
+    try {
+      const errorBody = (await response.json()) as unknown;
+      // Gemini wraps errors in an array; most providers use { error: { message } }.
+      const first = Array.isArray(errorBody) ? errorBody[0] : errorBody;
+      const error = (first as { error?: { message?: unknown } | string })?.error;
+      detail = typeof error === "string" ? error : typeof error?.message === "string" ? error.message : "";
+    } catch {
+      // Keep the fallback message below.
+    }
+    if (response.status === 401 || response.status === 403) {
+      throw new ApiError(job.text.invalidKey, 401);
+    }
+    if (response.status === 429) {
+      throw new ApiError(format(job.text.rateLimited, { provider: config.label }), 429);
+    }
+    throw new ApiError(detail || format(job.text.unavailable, { provider: config.label }), 502);
+  }
+
+  const data = (await response.json()) as {
+    choices?: Array<{ message?: { content?: string } }>;
+  };
+  const content = data.choices?.[0]?.message?.content;
+  if (!content) throw new Error("missing content");
+  return content;
+}
+
+// Claude models that accept server-side refusal fallbacks and effort control.
+const CLAUDE_FALLBACK = /^claude-(?:opus-5|sonnet-5-5|fable-5|mythos-5)/;
+const CLAUDE_EFFORT = /^claude-(?:opus|sonnet|haiku|fable|mythos)-5/;
+
+async function callAnthropic(job: Job) {
+  const client = new Anthropic({ apiKey: job.apiKey, maxRetries: 0, timeout: 90_000 });
+  try {
+    const message = await client.beta.messages.create({
+      model: job.model,
+      max_tokens: 16_000,
+      system: job.system,
+      messages: [{ role: "user", content: job.user }],
+      output_config: {
+        // Short subtitle lines need little deliberation.
+        ...(CLAUDE_EFFORT.test(job.model) ? { effort: "low" as const } : {}),
+        format: {
+          type: "json_schema",
+          schema: {
+            type: "object",
+            properties: {
+              translations: {
+                type: "array",
+                items: {
+                  type: "object",
+                  properties: { id: { type: "string" }, text: { type: "string" } },
+                  required: ["id", "text"],
+                  additionalProperties: false,
+                },
+              },
+            },
+            required: ["translations"],
+            additionalProperties: false,
+          },
+        },
+      },
+      // On a policy decline the API retries the batch on a suitable model.
+      ...(CLAUDE_FALLBACK.test(job.model)
+        ? { betas: ["server-side-fallback-2026-07-01"], fallbacks: "default" as const }
+        : {}),
+    });
+    if (message.stop_reason === "refusal") throw new ApiError(job.text.refused, 502);
+    const content = message.content
+      .flatMap((block) => (block.type === "text" ? [block.text] : []))
+      .join("");
+    if (!content) throw new Error("missing content");
+    return content;
+  } catch (error) {
+    if (error instanceof Anthropic.AuthenticationError || error instanceof Anthropic.PermissionDeniedError) {
+      throw new ApiError(job.text.invalidKey, 401);
+    }
+    if (error instanceof Anthropic.RateLimitError) {
+      throw new ApiError(format(job.text.rateLimited, { provider: job.config.label }), 429);
+    }
+    if (error instanceof Anthropic.APIConnectionError) {
+      throw new ApiError(format(job.text.connection, { provider: job.config.label }), 502);
+    }
+    if (error instanceof Anthropic.APIError) {
+      throw new ApiError(error.message || format(job.text.unavailable, { provider: job.config.label }), 502);
+    }
+    throw error;
+  }
+}
+
+async function requestTranslations(
+  base: Omit<Job, "system" | "user"> & { sourceLanguage: string; targetLanguage: string },
+  items: Array<Required<Pick<TranslationItem, "id" | "text" | "context" | "maxChars">> & { before?: string }>,
   glossary: GlossaryEntry[],
 ) {
   let lastError: ApiError | null = null;
@@ -148,133 +304,100 @@ async function requestDeepSeek(
       t: item.text,
       c: contextIndex,
       b: beforeIndex,
-      m: item.maxChineseChars || 32,
+      m: item.maxChars,
     };
   });
   const terms = glossaryFor(glossary, [...items.map((item) => item.text), ...contexts]);
+  const job: Job = {
+    ...base,
+    system: systemPrompt(base.sourceLanguage, base.targetLanguage, base.config.kind),
+    user: JSON.stringify({
+      c: contexts,
+      s: compactItems,
+      ...(terms.length ? { g: Object.fromEntries(terms) } : {}),
+    }),
+  };
+  const label = base.config.label;
 
   for (let attempt = 0; attempt < 3; attempt += 1) {
     try {
-      const response = await fetch("https://api.deepseek.com/chat/completions", {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${apiKey}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          model,
-          thinking: { type: "disabled" },
-          temperature: 0,
-          // This is only an output ceiling, not a reserved-token charge. Keep
-          // enough headroom so a valid JSON response is not cut off mid-item.
-          max_tokens: 4_000,
-          response_format: { type: "json_object" },
-          messages: [
-            {
-              role: "system",
-              content:
-                "专业影视字幕英译简中。输入中 c 是共享上下文数组，s 是条目；每项 t 才是待译文本，c 索引是所属原字幕、b 索引是前一条原字幕，二者仅供理解、不得译入当前条目；m 是含标点的中文字符上限；g 是必须统一使用的译名表（原文: 译名）。逐项严格对齐，不移动、合并或补写相邻内容。译文自然口语化、精炼且不换行，保留人名、术语和语气，在不遗漏核心信息下严格满足 m。只返回 JSON 对象：{\"translations\":{\"s0\":\"译文\"}}，每个 id 恰好一次。",
-            },
-            {
-              role: "user",
-              content: JSON.stringify({
-                c: contexts,
-                s: compactItems,
-                ...(terms.length ? { g: Object.fromEntries(terms) } : {}),
-              }),
-            },
-          ],
-        }),
-      });
+      const content = base.config.kind === "anthropic"
+        ? await callAnthropic(job)
+        : await callOpenAiCompatible(job);
 
-      if (!response.ok) {
-        let detail = "";
-        try {
-          const errorBody = (await response.json()) as {
-            error?: { message?: string };
-          };
-          detail = errorBody.error?.message || "";
-        } catch {
-          // Keep the fallback message below.
-        }
-
-        if (response.status === 401 || response.status === 403) {
-          throw new ApiError("API Key 无效或没有访问权限，请检查后重试。", 401);
-        }
-        if (response.status === 429) {
-          lastError = new ApiError(
-            "DeepSeek 请求过于频繁或余额不足，请稍后重试。",
-            429,
-          );
-        } else {
-          lastError = new ApiError(
-            detail || "DeepSeek 暂时无法完成这一批翻译。",
-            502,
-          );
-        }
-      } else {
-        const data = (await response.json()) as {
-          choices?: Array<{ message?: { content?: string } }>;
-        };
-        const content = data.choices?.[0]?.message?.content;
-        if (!content) throw new Error("missing content");
-
-        // m is a translation-quality target, not a transport-validity rule.
-        // Models may exceed it by a few characters; discarding such a valid
-        // result makes the same cue retry forever.
-        const expectedIds = new Set(compactItems.map((item) => item.id));
-        const compactTranslations = normalizeTranslations(
-          extractJson(content),
-          expectedIds,
-        );
-        const parsed = Object.fromEntries(
-          Object.entries(compactTranslations).map(([id, text]) => [
-            idMap.get(id)!,
-            text,
-          ]),
-        );
-        if (Object.keys(parsed).length) return parsed;
-        lastError = new ApiError("翻译结果格式异常。", 502);
-      }
+      // m is a translation-quality target, not a transport-validity rule.
+      // Models may exceed it by a few characters; discarding such a valid
+      // result makes the same cue retry forever.
+      const expectedIds = new Set(compactItems.map((item) => item.id));
+      const compactTranslations = normalizeTranslations(
+        extractJson(content),
+        expectedIds,
+      );
+      const parsed = Object.fromEntries(
+        Object.entries(compactTranslations).map(([id, text]) => [
+          idMap.get(id)!,
+          text,
+        ]),
+      );
+      if (Object.keys(parsed).length) return parsed;
+      lastError = new ApiError(base.text.badFormat, 502);
     } catch (error) {
       if (error instanceof ApiError && error.status === 401) throw error;
       lastError =
         error instanceof ApiError
           ? error
-          : new ApiError("暂时无法连接 DeepSeek，请稍后再试。", 502);
+          : error instanceof SyntaxError || (error instanceof Error && /json|content/.test(error.message))
+            ? new ApiError(base.text.badFormat, 502)
+            : new ApiError(format(base.text.connection, { provider: label }), 502);
     }
 
     if (attempt < 2) await delay(700 * 2 ** attempt);
   }
 
-  throw lastError || new ApiError("DeepSeek 翻译失败。", 502);
+  throw lastError || new ApiError(format(base.text.failed, { provider: label }), 502);
 }
 
 export async function POST(request: Request) {
   let body: {
     apiKey?: string;
+    provider?: string;
     model?: string;
+    sourceLanguage?: string;
+    targetLanguage?: string;
+    locale?: string;
     items?: TranslationItem[];
     glossary?: unknown;
   };
 
+  let text = getMessages("zh-CN").api;
   try {
     body = await request.json();
   } catch {
-    return jsonError("请求内容无法读取。", 400);
+    return jsonError(text.unreadable, 400);
+  }
+  text = getMessages(body.locale).api;
+
+  const provider = body.provider === undefined ? DEFAULT_PROVIDER : body.provider;
+  if (!isProvider(provider)) return jsonError(text.invalidProvider, 400);
+  const config = (PROVIDERS as Record<string, unknown>)[provider] as ProviderConfig;
+  const sourceLanguage = body.sourceLanguage ?? "en";
+  const targetLanguage = body.targetLanguage ?? "zh-Hans";
+  if (!isLanguage(sourceLanguage) || !isLanguage(targetLanguage) || sourceLanguage === targetLanguage) {
+    return jsonError(text.invalidLanguage, 400);
   }
 
   const apiKey = body.apiKey?.trim();
-  const model = ALLOWED_MODELS.has(body.model || "")
-    ? body.model!
-    : "deepseek-v4-flash";
+  const model = resolveModel(provider, body.model);
   const items = Array.isArray(body.items) ? body.items : [];
 
-  if (!apiKey) return jsonError("请填写 DeepSeek API Key。", 400);
+  if (!apiKey) return jsonError(format(text.missingKey, { provider: config.label }), 400);
   if (!items.length || items.length > 24) {
-    return jsonError("每批字幕数量需要在 1 到 24 条之间。", 400);
+    return jsonError(text.batchSize, 400);
   }
 
+  const validLength = (value: unknown) =>
+    value === undefined ||
+    (Number.isInteger(value) && (value as number) >= 8 && (value as number) <= 100);
   const safeItems = items
     .filter(
       (item) =>
@@ -282,10 +405,8 @@ export async function POST(request: Request) {
         typeof item?.text === "string" &&
         item.id.length <= 100 &&
         item.text.length <= 2_000 &&
-        (item.maxChineseChars === undefined ||
-          (Number.isInteger(item.maxChineseChars) &&
-            item.maxChineseChars >= 8 &&
-            item.maxChineseChars <= 32)) &&
+        validLength(item.maxChars) &&
+        validLength(item.maxChineseChars) &&
         (item.context === undefined ||
           (typeof item.context === "string" && item.context.length <= 4_000)) &&
         (item.before === undefined ||
@@ -296,11 +417,11 @@ export async function POST(request: Request) {
       text: item.text.trim(),
       context: item.context?.trim() || item.text.trim(),
       before: item.before?.trim() || undefined,
-      maxChineseChars: item.maxChineseChars || 32,
+      maxChars: item.maxChars || item.maxChineseChars || 32,
     }));
 
   if (safeItems.length !== items.length || safeItems.some((item) => !item.text)) {
-    return jsonError("有字幕内容不符合要求。", 400);
+    return jsonError(text.invalidItems, 400);
   }
 
   const glossaryInput = body.glossary ?? [];
@@ -318,18 +439,19 @@ export async function POST(request: Request) {
     glossaryInput.length > MAX_GLOSSARY_ENTRIES ||
     !glossaryInput.every(isEntry)
   ) {
-    return jsonError("译名表格式不符合要求。", 400);
+    return jsonError(text.invalidGlossary, 400);
   }
   const glossary: GlossaryEntry[] = glossaryInput;
 
   const translations: Record<string, string> = {};
   let remaining = safeItems;
+  const base = { provider, config, apiKey, model, text, sourceLanguage, targetLanguage };
 
   try {
     // If a response omits one or two IDs, retry only those IDs in a smaller
     // repair request instead of failing the whole batch.
     for (let round = 0; round < 3 && remaining.length; round += 1) {
-      const translated = await requestDeepSeek(apiKey, model, remaining, glossary);
+      const translated = await requestTranslations(base, remaining, glossary);
       Object.assign(translations, translated);
       remaining = remaining.filter((item) => !translations[item.id]);
     }
@@ -337,13 +459,13 @@ export async function POST(request: Request) {
     const apiError =
       error instanceof ApiError
         ? error
-        : new ApiError("DeepSeek 翻译失败，请稍后重试。", 502);
+        : new ApiError(format(text.failed, { provider: config.label }), 502);
     return jsonError(apiError.message, apiError.status, translations);
   }
 
   if (remaining.length) {
     return jsonError(
-      `还有 ${remaining.length} 条未返回，工具会自动继续重试。`,
+      format(text.missing, { count: remaining.length }),
       502,
       translations,
     );

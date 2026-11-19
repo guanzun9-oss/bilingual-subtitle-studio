@@ -9,13 +9,13 @@ export default function LogoMark({ className = "logo-mark" }: { className?: stri
   );
 }
 
-/** Logo lockup: mark, the Latin wordmark, and the Chinese name. */
-export function Wordmark() {
+/** Logo lockup: mark, the Latin wordmark, and the local name where the locale has one (字幕匠). */
+export function Wordmark({ localName = "" }: { localName?: string }) {
   return (
     <span className="wordmark">
       <LogoMark />
       <span className="wordmark-name">Cuewise</span>
-      <span className="wordmark-cn">字幕匠</span>
+      {localName && <span className="wordmark-cn">{localName}</span>}
     </span>
   );
 }

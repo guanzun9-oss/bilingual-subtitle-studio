@@ -2,20 +2,60 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { fetchWorker, mockUpstream, translationRequest } from "./helpers/worker.mjs";
 
-test("server renders the subtitle studio", async () => {
-  const response = await fetchWorker(new Request("http://localhost/", {
-    headers: { accept: "text/html" },
-  }));
-  assert.equal(response.status, 200);
-  assert.match(response.headers.get("content-type") ?? "", /^text\/html\b/i);
+test("the root address sends readers to their interface language", async () => {
+  for (const [acceptLanguage, cookie, expected] of [
+    ["zh-CN,zh;q=0.9,en;q=0.8", "", "/zh-CN"],
+    ["zh-TW,zh;q=0.9", "", "/zh-TW"],
+    ["ja-JP,ja;q=0.9,en;q=0.5", "", "/ja"],
+    ["fr-CA;q=0.4,es-MX;q=0.8", "", "/es"],
+    ["sw-KE", "", "/en"],
+    ["", "", "/en"],
+    ["en-US", "cuewise-locale=ko", "/ko"],
+    ["en-US", "cuewise-locale=xx", "/en"],
+  ]) {
+    const headers = { accept: "text/html" };
+    if (acceptLanguage) headers["accept-language"] = acceptLanguage;
+    if (cookie) headers.cookie = cookie;
+    const response = await fetchWorker(new Request("http://localhost/", { headers, redirect: "manual" }));
+    assert.equal(response.status, 307, `${acceptLanguage} ${cookie}`);
+    assert.equal(new URL(response.headers.get("location"), "http://localhost").pathname, expected, `${acceptLanguage} ${cookie}`);
+    assert.match(response.headers.get("vary") ?? "", /Accept-Language/i);
+  }
+});
 
-  const html = await response.text();
-  assert.match(html, /<html lang="zh-CN">/i);
-  assert.match(html, /Cuewise/);
-  assert.match(html, /字幕匠/);
-  assert.match(html, /字幕预览/);
-  assert.match(html, /DeepSeek/);
-  assert.doesNotMatch(html, /codex-preview|react-loading-skeleton/i);
+test("server renders the subtitle studio in each interface language", async () => {
+  const render = async (path) => {
+    const response = await fetchWorker(new Request(`http://localhost${path}`, { headers: { accept: "text/html" } }));
+    assert.equal(response.status, 200, path);
+    assert.match(response.headers.get("content-type") ?? "", /^text\/html\b/i);
+    return response.text();
+  };
+
+  const chinese = await render("/zh-CN");
+  assert.match(chinese, /<html lang="zh-CN" dir="ltr">/i);
+  assert.match(chinese, /Cuewise/);
+  assert.match(chinese, /字幕匠/);
+  assert.match(chinese, /字幕预览/);
+  assert.match(chinese, /DeepSeek/);
+  assert.match(chinese, /hreflang="ja"/i);
+  assert.doesNotMatch(chinese, /codex-preview|react-loading-skeleton/i);
+
+  const english = await render("/en");
+  assert.match(english, /<html lang="en" dir="ltr">/i);
+  assert.match(english, /Make bilingual subtitles/);
+  assert.match(english, /Anthropic Claude/);
+  assert.doesNotMatch(english, /字幕匠|字幕预览/);
+
+  const arabic = await render("/ar");
+  assert.match(arabic, /<html lang="ar" dir="rtl">/i);
+  assert.match(arabic, /إنشاء ترجمة ثنائية اللغة/);
+
+  for (const locale of ["zh-TW", "ja", "ko", "es", "fr", "de", "pt", "ru"]) {
+    assert.match(await render(`/${locale}`), new RegExp(`<html lang="${locale}"`, "i"));
+  }
+
+  const missing = await fetchWorker(new Request("http://localhost/xx", { headers: { accept: "text/html" } }));
+  assert.equal(missing.status, 404);
 });
 
 test("production translation route rejects invalid input without contacting the provider", async () => {
