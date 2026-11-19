@@ -135,8 +135,8 @@ We walked across the park and waited for the train.`));
 
 test("quality warnings report readability without changing or rejecting cues", () => {
   const cue = { text: "Ready?", startMs: 1000, endMs: 1200 };
-  assert.deepEqual(getSubtitleWarnings(cue, "准备好了吗？"), [
-    "显示不足 0.83 秒", "英文阅读速度超过 20 字符/秒", "中文阅读速度超过 9 字符/秒",
+  assert.deepEqual(getSubtitleWarnings(cue, "准备好了吗？").map(({ code, limit }) => `${code}:${limit}`), [
+    "too-short:0.83", "source-speed:20", "target-speed:9",
   ]);
   assert.equal(cue.startMs, 1000);
   assert.equal(cue.endMs, 1200);
@@ -254,7 +254,7 @@ test("rounding split times cannot add overlaps or extend the original range", ()
     assert.ok(tidy[index].endMs > tidy[index].startMs);
     if (index) assert.equal(tidy[index].startMs, tidy[index - 1].endMs);
   }
-  assert.throws(() => tidyCues([{ ...source[0], endMs: 1002 }]), /原字幕时长过短/);
+  assert.throws(() => tidyCues([{ ...source[0], endMs: 1002 }]), { code: "cue-too-short" });
 });
 
 test("export preserves sentence separation and original cue boundaries", () => {

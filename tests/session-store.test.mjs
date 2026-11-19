@@ -132,3 +132,36 @@ test("a session keeps its own glossary", () => {
   assert.equal(loadSession(storage, "a").glossary, "Zane = 赞恩");
   assert.equal(loadSession(storage, "b").glossary, undefined);
 });
+
+test("sessions keep work for several target languages and their source language", () => {
+  const storage = memoryStorage();
+  const japanese = { "source-1|0|Hi.": "こんにちは。" };
+  const byTarget = { "en>es": { "source-1|0|Hi.": "Hola." } };
+  saveSession(storage, { id: "m", name: "m.srt", sourceText: "SRT", translations: japanese, target: "ja", sourceLanguage: "en", byTarget }, 5);
+  const session = loadSession(storage, "m");
+  assert.equal(session.target, "ja");
+  assert.equal(session.sourceLanguage, "en");
+  assert.deepEqual(session.translations, japanese);
+  assert.deepEqual(session.byTarget, byTarget);
+  assert.equal(listSessions(storage)[0].translated, 1);
+
+  // Nothing extra is stored when no other pair has work.
+  saveSession(storage, { id: "n", name: "n.srt", sourceText: "SRT", translations: japanese, target: "ja", byTarget: { "en>es": {} } });
+  assert.equal("byTarget" in JSON.parse(storage.getItem("subtitle-studio:session:n")), false);
+
+  storage.setItem("subtitle-studio:session:x", JSON.stringify({ id: "x", translations: {}, byTarget: { ja: { a: 1 } } }));
+  assert.equal(loadSession(storage, "x"), null);
+});
+
+test("each provider remembers its own key, and DeepSeek keeps the original storage key", () => {
+  const storage = memoryStorage();
+  saveApiKey(storage, "sk-deepseek");
+  saveApiKey(storage, "sk-openai", "openai");
+  assert.equal(storage.data.get("subtitle-studio:api-key"), "sk-deepseek");
+  assert.equal(loadApiKey(storage, "deepseek"), "sk-deepseek");
+  assert.equal(loadApiKey(storage, "openai"), "sk-openai");
+  assert.equal(loadApiKey(storage, "anthropic"), "");
+  saveApiKey(storage, "", "openai");
+  assert.equal(loadApiKey(storage, "openai"), "");
+  assert.equal(loadApiKey(storage), "sk-deepseek");
+});

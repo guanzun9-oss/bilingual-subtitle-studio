@@ -57,6 +57,8 @@ export async function fetchWorker(request) {
     method: request.method,
     headers: request.headers,
     body: request.body ? await request.text() : undefined,
+    // Let tests see redirects instead of following them.
+    redirect: request.redirect,
   });
 }
 

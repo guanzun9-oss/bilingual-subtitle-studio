@@ -42,3 +42,12 @@ test("matches whole terms, with plural and possessive endings", () => {
   );
   assert.deepEqual(glossaryFor(entries, ["Mars."]), [["Mars", "火星"]]);
 });
+
+test("matches whole words in any spaced script and substrings in unspaced ones", async () => {
+  const { glossaryFor } = await import("../lib/glossary.mjs");
+  const entries = [["Иван", "Ivan"], ["東京", "Tokyo"], ["Ann", "Anne"]];
+  assert.deepEqual(glossaryFor(entries, ["Привет, Иван!"]), [["Иван", "Ivan"]]);
+  assert.deepEqual(glossaryFor(entries, ["Иванов пришёл."]), []);
+  assert.deepEqual(glossaryFor(entries, ["明日東京に行きます。"]), [["東京", "Tokyo"]]);
+  assert.deepEqual(glossaryFor(entries, ["You cannot go."]), []);
+});

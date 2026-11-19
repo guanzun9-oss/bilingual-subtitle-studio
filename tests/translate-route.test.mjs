@@ -113,10 +113,13 @@ test("rejects length targets outside the supported range", async () => {
   mockUpstream(() => {
     throw new Error("Invalid input must not trigger an upstream request");
   });
-  for (const maxChineseChars of [7, 33, 12.5]) {
-    const { status } = await translate({ items: [{ id: "cue", text: "Hello.", maxChineseChars }] });
-    assert.equal(status, 400, String(maxChineseChars));
+  for (const maxChars of [7, 101, 12.5]) {
+    const { status } = await translate({ items: [{ id: "cue", text: "Hello.", maxChars }] });
+    assert.equal(status, 400, String(maxChars));
   }
+  // The older field name from Chinese-only versions is still checked.
+  const { status } = await translate({ items: [{ id: "cue", text: "Hello.", maxChineseChars: 7 }] });
+  assert.equal(status, 400);
 });
 
 test("adds the previous cue only where the batch does not already show it", async () => {

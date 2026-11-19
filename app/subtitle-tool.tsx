@@ -4,15 +4,25 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   formatTimestamp,
   getSubtitleWarnings,
-  isReadableChineseSubtitle,
+  isReadableSubtitle,
   parseSrt,
   serializeSrt,
   subtitleDuration,
   tidyCues,
-  wrapChineseSubtitle,
+  wrapSubtitle,
 } from "@/lib/srt-core.mjs";
 import LogoMark from "./logo-mark";
+import { DEMO_TRANSLATIONS, SAMPLE_SRT } from "@/lib/demo.mjs";
 import { parseGlossary } from "@/lib/glossary.mjs";
+import { format, type Locale, type Messages } from "@/lib/i18n";
+import {
+  LANGUAGES,
+  getLanguage,
+  guessLanguage,
+  isLanguage,
+  maxTranslationChars,
+} from "@/lib/languages.mjs";
+import { DEFAULT_PROVIDER, PROVIDERS, PROVIDER_IDS, isProvider, resolveModel } from "@/lib/providers.mjs";
 import { EDITOR_PROFILES, exportFileName, getSubtitleProfile } from "@/lib/subtitle-profiles.mjs";
 import {
   fingerprint,
@@ -40,7 +50,10 @@ type Cue = {
 };
 
 type Mode = "new-cue" | "line-break";
-type Order = "chinese-first" | "english-first";
+type Order = "translation-first" | "source-first";
+type Content = "bilingual" | "source" | "translation";
+type Editor = keyof Messages["editors"];
+type Translations = Record<string, string>;
 
 type SavedSession = {
   id: string;
@@ -50,7 +63,17 @@ type SavedSession = {
   hasSource: boolean;
 };
 
-const MODELS = ["deepseek-v4-flash", "deepseek-v4-pro"];
+type Profile = ReturnType<typeof getSubtitleProfile>;
+
+/**
+ * Translations belong to a language pair, not just a target: correcting the
+ * source language must not keep work done under the wrong one.
+ */
+function pairKey(source: string, target: string) {
+  return `${source}>${target}`;
+}
+
+const PROVIDER_CONFIG = PROVIDERS as Record<string, { label: string; keyUrl: string; keyHint: string; models: string[]; strictModels?: boolean }>;
 
 /** localStorage, or undefined where the browser blocks it (e.g. some private modes). */
 function browserStorage() {
@@ -61,33 +84,14 @@ function browserStorage() {
   }
 }
 
-function formatSavedAt(savedAt: number) {
-  return new Date(savedAt).toLocaleString("zh-CN", {
+function formatSavedAt(savedAt: number, locale: string) {
+  return new Date(savedAt).toLocaleString(locale, {
     month: "numeric",
     day: "numeric",
     hour: "2-digit",
     minute: "2-digit",
   });
 }
-
-const SAMPLE_SRT = `1
-00:00:01,000 --> 00:00:08,600
-When we started this project, we thought the hardest part would be the technology, but it turned out to be understanding what people truly needed.
-
-2
-00:00:09,100 --> 00:00:14,800
-That changed everything. What should we do next? Let's find out!`;
-
-// Sample translations so the demo shows the whole flow without an API key.
-const DEMO_TRANSLATIONS: Record<string, string> = {
-  "When we started this project, we thought": "我们刚开始做这个项目时，以为",
-  "the hardest part would be the technology,": "最难的会是技术，",
-  "but it turned out to be understanding what people truly needed.": "结果最难的是理解大家真正需要什么。",
-  "When we started this project, we thought the hardest part would be the technology, but it turned out to be understanding what people truly needed.": "我们刚开始做这个项目时，以为最难的会是技术，结果最难的是理解大家真正需要什么。",
-  "That changed everything.": "这改变了一切。",
-  "What should we do next?": "接下来该做什么？",
-  "Let's find out!": "一起来看看吧！",
-};
 
 function formatDuration(ms: number) {
   const totalSeconds = Math.round(ms / 1000);
@@ -96,23 +100,17 @@ function formatDuration(ms: number) {
   return `${minutes}:${String(seconds).padStart(2, "0")}`;
 }
 
-function maxChineseChars(cue: Cue, lineChars = 16) {
-  return Math.max(
-    8,
-    Math.min(lineChars * 2, Math.floor(((cue.endMs - cue.startMs) / 1000) * 9)),
-  );
+/** Interface text for an error from the subtitle core, which carries a code. */
+function errorText(error: unknown, t: Messages, fallback: string) {
+  const code = (error as { code?: string })?.code;
+  if (code && Object.hasOwn(t.errors, code)) return t.errors[code as keyof Messages["errors"]];
+  return fallback;
 }
 
 type CueState = "done" | "pending" | "warn";
 type Filter = "all" | "pending" | "warn";
 
 const STATE_CODE: Record<CueState, string> = { done: "d", pending: "p", warn: "w" };
-
-const EDITOR_SHORT_LABELS: Record<string, string> = {
-  resolve: "达芬奇",
-  premiere: "Premiere",
-  generic: "通用 SRT",
-};
 
 function formatClock(ms: number) {
   const totalSeconds = Math.floor(ms / 1000);
@@ -123,16 +121,20 @@ function formatClock(ms: number) {
   return hours ? `${hours}:${mmss}` : mmss;
 }
 
-// Quality checks wrap and measure the Chinese text. Re-running them for every
+// Quality checks wrap and measure the translation. Re-running them for every
 // cue on each keystroke made editing long files slow, so reuse the result
-// until the cue, its translation, or the layout profile changes.
-const warningCache = new WeakMap<Cue, { translation: string; profile: object; text: string }>();
+// until the cue, its translation, the layout profile or the wording changes.
+const warningCache = new WeakMap<Cue, { translation: string; profile: object; wording: object; text: string }>();
 
-function cueWarningText(cue: Cue, translation: string, profile: ReturnType<typeof getSubtitleProfile>) {
+function cueWarningText(cue: Cue, translation: string, profile: Profile, wording: Messages["warnings"]) {
   const cached = warningCache.get(cue);
-  if (cached && cached.translation === translation && cached.profile === profile) return cached.text;
-  const text = getSubtitleWarnings(cue, translation, profile).join(" · ");
-  warningCache.set(cue, { translation, profile, text });
+  if (cached && cached.translation === translation && cached.profile === profile && cached.wording === wording) {
+    return cached.text;
+  }
+  const text = getSubtitleWarnings(cue, translation, profile)
+    .map(({ code, limit }) => format(wording[code as keyof typeof wording] ?? code, { limit }))
+    .join(" · ");
+  warningCache.set(cue, { translation, profile, wording, text });
   return text;
 }
 
@@ -145,8 +147,11 @@ type SubtitleRowProps = {
   active: boolean;
   order: Order;
   timeOffsetMs: number;
-  chineseLineChars: number;
+  targetLineChars: number;
+  sourceLanguage: string;
+  targetLanguage: string;
   placeholder: string;
+  t: Messages["tool"];
   onEdit: (key: string, value: string) => void;
   onSelect: (index: number) => void;
   onNavigate: (index: number, step: 1 | -1) => void;
@@ -174,6 +179,10 @@ function revealRow(row: HTMLElement, block: "center" | "nearest", frames = 3) {
   if (frames > 0) requestAnimationFrame(() => revealRow(row, block, frames - 1));
 }
 
+function dirOf(code: string) {
+  return getLanguage(code).rtl ? "rtl" : "ltr";
+}
+
 // Long films produce thousands of rows; typing in one must not re-render the rest.
 const SubtitleRow = memo(function SubtitleRow({
   cue,
@@ -183,8 +192,11 @@ const SubtitleRow = memo(function SubtitleRow({
   active,
   order,
   timeOffsetMs,
-  chineseLineChars,
+  targetLineChars,
+  sourceLanguage,
+  targetLanguage,
   placeholder,
+  t,
   onEdit,
   onSelect,
   onNavigate,
@@ -192,7 +204,7 @@ const SubtitleRow = memo(function SubtitleRow({
   const state: CueState = warnings ? "warn" : translation.trim() ? "done" : "pending";
   return (
     <article id={`cue-row-${index}`} data-cue-index={index} className={`cue-row ${state} ${active ? "active" : ""}`}>
-      <button className="cue-index" type="button" aria-label={`预览第 ${index + 1} 条字幕`} aria-pressed={active} onClick={() => onSelect(index)}>
+      <button className="cue-index" type="button" aria-label={format(t.previewCue, { index: index + 1 })} aria-pressed={active} onClick={() => onSelect(index)}>
         {String(index + 1).padStart(3, "0")}
       </button>
       <div className="cue-time">
@@ -202,7 +214,9 @@ const SubtitleRow = memo(function SubtitleRow({
       </div>
       <div className={`cue-copy ${order}`}>
         <textarea
-          aria-label={`第 ${index + 1} 条中文字幕`}
+          aria-label={format(t.editCue, { index: index + 1 })}
+          lang={targetLanguage}
+          dir={dirOf(targetLanguage)}
           value={translation}
           onChange={(event) => onEdit(cue.key, event.target.value)}
           onFocus={() => onSelect(index)}
@@ -213,12 +227,12 @@ const SubtitleRow = memo(function SubtitleRow({
             }
           }}
           placeholder={placeholder}
-          rows={Math.max(1, wrapChineseSubtitle(translation, chineseLineChars).split("\n").length)}
+          rows={Math.max(1, wrapSubtitle(translation, targetLineChars, targetLanguage).split("\n").length)}
         />
-        <p lang="en">{cue.text}</p>
+        <p lang={sourceLanguage} dir={dirOf(sourceLanguage)}>{cue.text}</p>
       </div>
       <span className="cue-state" aria-hidden="true" />
-      {warnings && <p className="cue-warning">需检查 · {warnings}</p>}
+      {warnings && <p className="cue-warning">{format(t.check, { warnings })}</p>}
     </article>
   );
 });
@@ -228,11 +242,12 @@ type SignalTrackProps = {
   /** One letter per cue (see STATE_CODE), so the track only redraws when a state changes. */
   stateCodes: string;
   activeIndex: number;
+  label: string;
   onSelect: (index: number) => void;
 };
 
 /** The whole subtitle track at a glance: every cue drawn at its time, coloured by state. */
-const SignalTrack = memo(function SignalTrack({ cues, stateCodes, activeIndex, onSelect }: SignalTrackProps) {
+const SignalTrack = memo(function SignalTrack({ cues, stateCodes, activeIndex, label, onSelect }: SignalTrackProps) {
   const duration = useMemo(() => cues.reduce((max, cue) => Math.max(max, cue.endMs), 0), [cues]);
   const paths = useMemo(() => {
     const d: Record<string, string> = { d: "", p: "", w: "" };
@@ -248,12 +263,13 @@ const SignalTrack = memo(function SignalTrack({ cues, stateCodes, activeIndex, o
   const active = cues[activeIndex];
   const marker = active ? (active.startMs / duration) * 100 : 0;
 
+  // Time runs left to right in every interface language.
   return (
-    <div className="signal-track">
+    <div className="signal-track" dir="ltr">
       <div
         className="track-plot"
         role="img"
-        aria-label={`字幕轨道：共 ${cues.length} 条，时长 ${formatClock(duration)}`}
+        aria-label={format(label, { count: cues.length, duration: formatClock(duration) })}
         onClick={(event) => {
           const box = event.currentTarget.getBoundingClientRect();
           const ms = ((event.clientX - box.left) / box.width) * duration;
@@ -281,23 +297,37 @@ const SignalTrack = memo(function SignalTrack({ cues, stateCodes, activeIndex, o
   );
 });
 
-export default function SubtitleTool() {
+type SubtitleToolProps = {
+  t: Messages;
+  locale: Locale;
+  /** Translation language preselected for this interface language. */
+  defaultTarget: string;
+};
+
+export default function SubtitleTool({ t: messages, locale, defaultTarget }: SubtitleToolProps) {
+  const t = messages.tool;
   const fileInputRef = useRef<HTMLInputElement>(null);
   const abortRef = useRef<AbortController | null>(null);
   const [sourceName, setSourceName] = useState("");
   const [sourceCues, setSourceCues] = useState<Cue[]>([]);
+  const [sourceLanguage, setSourceLanguage] = useState("en");
+  const [targetLanguage, setTargetLanguage] = useState(defaultTarget);
+  const [detectedLanguage, setDetectedLanguage] = useState("");
   const [maxChars, setMaxChars] = useState(72);
   const [mode, setMode] = useState<Mode>("new-cue");
-  const [editor, setEditor] = useState("generic");
+  const [editor, setEditor] = useState<Editor>("generic");
   const [frame, setFrame] = useState("landscape");
   const [timeOffsetSeconds, setTimeOffsetSeconds] = useState(0);
   const [previewIndex, setPreviewIndex] = useState(0);
-  const [order, setOrder] = useState<Order>("chinese-first");
-  const [model, setModel] = useState("deepseek-v4-flash");
-  const [apiKey, setApiKey] = useState("");
-  // Keyed by cue text rather than position: changing the layout settings
-  // re-splits cues, and every piece whose text is unchanged keeps its work.
-  const [translationsByKey, setTranslationsByKey] = useState<Record<string, string>>({});
+  const [order, setOrder] = useState<Order>("translation-first");
+  const [provider, setProvider] = useState<string>(locale.startsWith("zh") ? DEFAULT_PROVIDER : "openai");
+  const [models, setModels] = useState<Record<string, string>>({});
+  const [apiKeys, setApiKeys] = useState<Record<string, string>>({});
+  // Keyed by language pair (see pairKey), then by cue text rather than
+  // position: changing the layout settings re-splits cues, and every piece
+  // whose text is unchanged keeps its work; switching languages keeps the
+  // other pair's work.
+  const [allTranslations, setAllTranslations] = useState<Record<string, Translations>>({});
   const [status, setStatus] = useState<
     "idle" | "ready" | "translating" | "done" | "error"
   >("idle");
@@ -321,15 +351,22 @@ export default function SubtitleTool() {
   // first render's `false`, so they cannot save defaults over stored values.
   const [storageLoaded, setStorageLoaded] = useState(false);
 
-  useEffect(() => {
-    if (!storageLoaded) return;
-    savePrefs(browserStorage(), { editor, frame, order, model, maxChars, mode });
-  }, [storageLoaded, editor, frame, order, model, maxChars, mode]);
+  const providerConfig = PROVIDER_CONFIG[provider];
+  const model = resolveModel(provider, models[provider]);
+  const apiKey = apiKeys[provider] ?? "";
+  const currentPair = pairKey(sourceLanguage, targetLanguage);
+  const translationsByKey = useMemo(() => allTranslations[currentPair] ?? {}, [allTranslations, currentPair]);
+  const sameLanguage = sourceLanguage === targetLanguage;
 
   useEffect(() => {
     if (!storageLoaded) return;
-    saveApiKey(browserStorage(), rememberKey ? apiKey.trim() : "");
-  }, [storageLoaded, apiKey, rememberKey]);
+    savePrefs(browserStorage(), { editor, frame, order, provider, models, maxChars, mode, targetLanguage });
+  }, [storageLoaded, editor, frame, order, provider, models, maxChars, mode, targetLanguage]);
+
+  useEffect(() => {
+    if (!storageLoaded) return;
+    saveApiKey(browserStorage(), rememberKey ? apiKey.trim() : "", provider);
+  }, [storageLoaded, apiKey, rememberKey, provider]);
 
   useEffect(() => {
     if (!sessionId) return;
@@ -339,11 +376,16 @@ export default function SubtitleTool() {
         name: sourceName,
         sourceText: sourceTextRef.current,
         translations: translationsByKey,
+        target: targetLanguage,
+        sourceLanguage,
+        // The current pair is already in `translations`; storing it twice
+        // could push a large file over the storage quota.
+        byTarget: Object.fromEntries(Object.entries(allTranslations).filter(([key]) => key !== currentPair)),
         glossary: glossaryText,
       });
     }, 500);
     return () => clearTimeout(timer);
-  }, [sessionId, sourceName, translationsByKey, glossaryText]);
+  }, [sessionId, sourceName, translationsByKey, targetLanguage, sourceLanguage, allTranslations, currentPair, glossaryText]);
 
   useEffect(() => {
     // Restoring browser-only state has to wait until after hydration.
@@ -352,13 +394,22 @@ export default function SubtitleTool() {
     const prefs = loadPrefs(storage);
     if (Object.hasOwn(EDITOR_PROFILES, prefs.editor)) setEditor(prefs.editor);
     if (prefs.frame === "landscape" || prefs.frame === "portrait") setFrame(prefs.frame);
-    if (prefs.order === "chinese-first" || prefs.order === "english-first") setOrder(prefs.order);
-    if (MODELS.includes(prefs.model)) setModel(prefs.model);
+    // Older versions stored "chinese-first" / "english-first".
+    if (prefs.order === "translation-first" || prefs.order === "chinese-first") setOrder("translation-first");
+    if (prefs.order === "source-first" || prefs.order === "english-first") setOrder("source-first");
+    if (isProvider(prefs.provider)) setProvider(prefs.provider);
+    const savedModels = prefs.models && typeof prefs.models === "object" ? { ...prefs.models } : {};
+    // Before other providers existed, the DeepSeek model was stored on its own.
+    if (typeof prefs.model === "string" && !savedModels.deepseek) savedModels.deepseek = prefs.model;
+    setModels(Object.fromEntries(Object.entries(savedModels).filter(([, value]) => typeof value === "string")) as Record<string, string>);
+    if (isLanguage(prefs.targetLanguage)) setTargetLanguage(prefs.targetLanguage);
     if ([48, 54, 60, 66, 72, 78, 84].includes(prefs.maxChars)) setMaxChars(prefs.maxChars);
     if (prefs.mode === "new-cue" || prefs.mode === "line-break") setMode(prefs.mode);
-    const savedKey = loadApiKey(storage);
-    if (savedKey) {
-      setApiKey(savedKey);
+    const savedKeys = Object.fromEntries(
+      PROVIDER_IDS.map((id) => [id, loadApiKey(storage, id)]).filter(([, key]) => key),
+    );
+    if (Object.keys(savedKeys).length) {
+      setApiKeys(savedKeys);
       setRememberKey(true);
     }
     setLastSession(listSessions(storage)[0] ?? null);
@@ -366,25 +417,35 @@ export default function SubtitleTool() {
     /* eslint-enable react-hooks/set-state-in-effect */
   }, []);
 
-  const profile = useMemo(() => getSubtitleProfile(editor, frame), [editor, frame]);
+  const profile = useMemo(
+    () => getSubtitleProfile(editor, frame, sourceLanguage, targetLanguage),
+    [editor, frame, sourceLanguage, targetLanguage],
+  );
+  // The length slider is in English characters; other languages scale it to their own width.
+  const sourceMaxChars = Math.max(16, Math.round((maxChars * getLanguage(sourceLanguage).lineChars) / 42));
   const prepared = useMemo(
     () => {
       try {
         return {
-          cues: tidyCues(sourceCues, { maxChars, mode, lineChars: profile.englishLineChars }) as Cue[],
+          cues: tidyCues(sourceCues, {
+            maxChars: sourceMaxChars,
+            mode,
+            lineChars: profile.sourceLineChars,
+            language: sourceLanguage,
+          }) as Cue[],
           error: "",
         };
       } catch (error) {
-        return { cues: [] as Cue[], error: error instanceof Error ? error.message : "字幕断句失败。" };
+        return { cues: [] as Cue[], error: errorText(error, messages, t.splitFailed) };
       }
     },
-    [sourceCues, maxChars, mode, profile],
+    [sourceCues, sourceMaxChars, mode, profile, sourceLanguage, messages, t.splitFailed],
   );
   const tidy = prepared.cues;
   const translations = useMemo(
     () => Object.fromEntries(
       tidy.flatMap((cue) => translationsByKey[cue.key] ? [[cue.id, translationsByKey[cue.key]]] : []),
-    ) as Record<string, string>,
+    ) as Translations,
     [tidy, translationsByKey],
   );
   const activePreviewIndex = Math.min(previewIndex, Math.max(0, tidy.length - 1));
@@ -392,9 +453,9 @@ export default function SubtitleTool() {
   const cueWarnings = useMemo(
     () => Object.fromEntries(tidy.map((cue) => [
       cue.id,
-      cueWarningText(cue, translations[cue.id] || "", profile),
+      cueWarningText(cue, translations[cue.id] || "", profile, messages.warnings),
     ])) as Record<string, string>,
-    [tidy, translations, profile],
+    [tidy, translations, profile, messages.warnings],
   );
   const qualityWarningCount = Object.values(cueWarnings).filter(Boolean).length;
   const stateCodes = useMemo(
@@ -414,7 +475,7 @@ export default function SubtitleTool() {
     [tidy, filter, activePreviewIndex, translations, cueWarnings],
   );
 
-  // The hero's "先看演示" link points at #demo: open the demo and show the studio.
+  // The hero's demo link points at #demo: open the demo and show the studio.
   useEffect(() => {
     const openDemo = () => {
       if (window.location.hash !== "#demo") return;
@@ -459,12 +520,13 @@ export default function SubtitleTool() {
       tidy.filter(
         (cue) =>
           translations[cue.id]?.trim() &&
-          !isReadableChineseSubtitle(
+          !isReadableSubtitle(
             translations[cue.id],
-            maxChineseChars(cue, profile.chineseLineChars),
+            maxTranslationChars(cue.endMs - cue.startMs, targetLanguage, frame),
+            targetLanguage,
           ),
       ).length,
-    [tidy, translations, profile],
+    [tidy, translations, targetLanguage, frame],
   );
 
   const progress = tidy.length
@@ -476,18 +538,24 @@ export default function SubtitleTool() {
     status === "ready" && tidy.length > 0 && translatedCount === tidy.length ? "done" : status;
   const progressLabel =
     progressStatus === "done"
-      ? "制作完成"
+      ? t.stateDone
       : status === "translating"
-        ? "正在翻译与校准…"
+        ? t.stateTranslating
         : status === "error"
-          ? "任务中断，当前进度已保留"
+          ? t.stateError
           : translatedCount
-            ? "任务已暂停，可以继续"
-            : "准备就绪";
+            ? t.statePaused
+            : t.stateReady;
 
   function settingsChanged() {
     setMessage("");
     setStatus(sourceCues.length ? "ready" : "idle");
+  }
+
+  /** Change the source language, keeping the translation language different. */
+  function chooseSource(code: string) {
+    setSourceLanguage(code);
+    if (code === targetLanguage) setTargetLanguage(code === defaultTarget ? (code === "en" ? "zh-Hans" : "en") : defaultTarget);
   }
 
   async function loadText(text: string, name: string, persist = true) {
@@ -495,33 +563,52 @@ export default function SubtitleTool() {
       const cues = parseSrt(text) as Cue[];
       const id = persist ? fingerprint(text) : null;
       const saved = id ? loadSession(browserStorage(), id) : null;
-      const restored: Record<string, string> = saved?.translations ?? {};
+      // A saved session knows its languages; otherwise look at the text.
+      const guessed = persist ? guessLanguage(cues.map((cue) => cue.text).join("\n")) : "en";
+      const source = isLanguage(saved?.sourceLanguage) ? saved.sourceLanguage : isLanguage(guessed) ? guessed : sourceLanguage;
+      let target = isLanguage(saved?.target) && saved.target !== source ? saved.target : targetLanguage;
+      if (target === source) target = source === defaultTarget ? (source === "en" ? "zh-Hans" : "en") : defaultTarget;
+      const restored: Record<string, Translations> = saved
+        // Sessions from before language choice were English to Simplified Chinese.
+        ? {
+            ...(saved.byTarget ?? {}),
+            [pairKey(saved.sourceLanguage ?? "en", saved.target ?? "zh-Hans")]: saved.translations,
+          }
+        : {};
+      let demoHasSample = true;
       if (!persist) {
         // The demo arrives already translated, keyed for the current layout.
-        const pieces = tidyCues(cues, { maxChars, mode, lineChars: profile.englishLineChars }) as Cue[];
+        const samples = (DEMO_TRANSLATIONS as Record<string, Translations>)[target];
+        demoHasSample = Boolean(samples);
+        const pieces = tidyCues(cues, { maxChars, mode, lineChars: getSubtitleProfile(editor, frame, "en", target).sourceLineChars, language: "en" }) as Cue[];
+        const sampleByKey: Translations = {};
         for (const piece of pieces) {
-          const sample = DEMO_TRANSLATIONS[piece.text.replace(/\n/g, " ")];
-          if (sample) restored[piece.key] = sample;
+          const sample = samples?.[piece.text.replace(/\n/g, " ")];
+          if (sample) sampleByKey[piece.key] = sample;
         }
+        restored[pairKey(source, target)] = sampleByKey;
       }
-      const restoredCount = Object.values(restored).filter((value) => value.trim()).length;
+      const restoredCount = Object.values(restored[pairKey(source, target)] ?? {}).filter((value) => value.trim()).length;
       sourceTextRef.current = text;
       setSessionId(id);
       setSourceName(name);
+      setSourceLanguage(source);
+      setTargetLanguage(target);
+      setDetectedLanguage(persist && !saved && guessed === source ? guessed : "");
       setSourceCues(cues);
       setPreviewIndex(0);
-      setTranslationsByKey(restored);
+      setAllTranslations(restored);
       // Names belong to a film: restore its list, or keep what was typed for a new file.
       if (saved) setGlossaryText(saved.glossary ?? "");
       setStatus("ready");
       setMessage(
         !persist
-          ? "当前为演示字幕，译文为示例。导入你的 SRT 并填写 API Key，即可正式翻译。"
-          : restoredCount ? `已恢复上次保存的 ${restoredCount} 条译文。` : "",
+          ? demoHasSample ? t.demoLoaded : t.demoNoSample
+          : restoredCount ? format(t.restored, { count: restoredCount }) : "",
       );
     } catch (error) {
       setStatus("error");
-      setMessage(error instanceof Error ? error.message : "字幕文件读取失败。");
+      setMessage(errorText(error, messages, t.readFailed));
     }
   }
 
@@ -529,12 +616,12 @@ export default function SubtitleTool() {
     if (!file) return;
     if (!file.name.toLowerCase().endsWith(".srt")) {
       setStatus("error");
-      setMessage("请选择 .srt 字幕文件。");
+      setMessage(t.chooseSrt);
       return;
     }
     if (file.size > 4 * 1024 * 1024) {
       setStatus("error");
-      setMessage("文件请不要超过 4 MB。");
+      setMessage(t.tooLarge);
       return;
     }
     await loadText(await file.text(), file.name);
@@ -557,20 +644,29 @@ export default function SubtitleTool() {
     setLastSession(listSessions(storage)[0] ?? null);
   }
 
+  function setTargetTranslations(update: (current: Translations) => Translations) {
+    setAllTranslations((all) => ({ ...all, [currentPair]: update(all[currentPair] ?? {}) }));
+  }
+
   async function translate(restart = false) {
     if (!sourceCues.length) {
       setStatus("error");
-      setMessage("请先导入英文 SRT 文件。");
+      setMessage(t.importFirst);
       return;
     }
     if (!tidy.length) {
       setStatus("error");
-      setMessage(prepared.error || "没有可翻译的字幕。");
+      setMessage(prepared.error || t.nothingToTranslate);
+      return;
+    }
+    if (sameLanguage) {
+      setStatus("error");
+      setMessage(t.sameLanguage);
       return;
     }
     if (!apiKey.trim()) {
       setStatus("error");
-      setMessage("请先在「翻译引擎」中填写 DeepSeek API Key；如尚未申请，可点击「获取 Key」。");
+      setMessage(format(t.needKey, { provider: providerConfig.label }));
       keyInputRef.current?.focus();
       keyInputRef.current?.scrollIntoView({ block: "center" });
       setKeyAttention(true);
@@ -582,22 +678,24 @@ export default function SubtitleTool() {
     setStatus("translating");
     setMessage("");
     const keyById = new Map(tidy.map((cue) => [cue.id, cue.key]));
-    const nextTranslations: Record<string, string> = restart
+    const nextTranslations: Translations = restart
       ? {}
       : Object.fromEntries(
           Object.entries(translations).filter(([, text]) => text.trim()),
         );
-    if (restart) setTranslationsByKey({});
+    if (restart) setTargetTranslations(() => ({}));
     const pending = tidy.filter((cue) => !nextTranslations[cue.id]?.trim());
+    // Languages can change while a run is going; results belong to the pair it started with.
+    const runTarget = targetLanguage;
+    const runPair = currentPair;
 
     try {
       if (!pending.length) {
         setStatus("done");
-        setMessage("全部字幕已经翻译完成。");
+        setMessage(t.allDone);
         return;
       }
 
-      const lineChars = profile.chineseLineChars;
       const glossary = parseGlossary(glossaryText);
       await translateInBatches(
         pending,
@@ -608,14 +706,18 @@ export default function SubtitleTool() {
             signal,
             body: JSON.stringify({
               apiKey: apiKey.trim(),
+              provider,
               model,
+              sourceLanguage,
+              targetLanguage: runTarget,
+              locale,
               glossary,
               items: group.map((cue) => ({
                 id: cue.id,
                 text: cue.text.replace(/\n/g, " "),
                 context: (cue.contextText || cue.text).replace(/\n/g, " "),
                 before: cue.previousText,
-                maxChineseChars: maxChineseChars(cue, lineChars),
+                maxChars: maxTranslationChars(cue.endMs - cue.startMs, runTarget, frame),
               })),
             }),
           });
@@ -629,12 +731,13 @@ export default function SubtitleTool() {
         },
         {
           signal: controller.signal,
-          onProgress: (received: Record<string, string>) => {
+          messages: messages.queue,
+          onProgress: (received: Translations) => {
             Object.assign(nextTranslations, received);
-            setTranslationsByKey((current) => {
-              const next = { ...current };
+            setAllTranslations((all) => {
+              const next = { ...(all[runPair] ?? {}) };
               for (const [id, text] of Object.entries(received)) next[keyById.get(id)!] = text;
-              return next;
+              return { ...all, [runPair]: next };
             });
           },
         },
@@ -643,28 +746,27 @@ export default function SubtitleTool() {
       const finalOverlongCount = tidy.filter(
         (cue) =>
           nextTranslations[cue.id]?.trim() &&
-          !isReadableChineseSubtitle(
+          !isReadableSubtitle(
             nextTranslations[cue.id],
-            maxChineseChars(cue, profile.chineseLineChars),
+            maxTranslationChars(cue.endMs - cue.startMs, runTarget, frame),
+            runTarget,
           ),
       ).length;
       setStatus("done");
       setMessage(
         finalOverlongCount
-          ? `翻译完成，其中 ${finalOverlongCount} 条偏长，建议在预览中精简后下载。`
-          : "翻译完成，可以检查预览并下载。",
+          ? format(t.doneOverlong, { count: finalOverlongCount })
+          : t.done,
       );
     } catch (error) {
       if (controller.signal.aborted) {
         setStatus("ready");
-        setMessage("已停止翻译。");
+        setMessage(t.stopped);
       } else {
         setStatus("error");
         const finished = Object.keys(nextTranslations).length;
-        const detail = error instanceof Error ? error.message : "翻译失败。";
-        setMessage(
-          `${detail} 已保留完成的 ${finished} 条，点击按钮可从这里继续。`,
-        );
+        const detail = error instanceof Error ? error.message : t.translateFailed;
+        setMessage(format(t.failedKept, { detail, count: finished }));
       }
     } finally {
       abortRef.current = null;
@@ -672,8 +774,8 @@ export default function SubtitleTool() {
   }
 
   const updateTranslation = useCallback((key: string, value: string) => {
-    setTranslationsByKey((current) => ({ ...current, [key]: value }));
-  }, []);
+    setAllTranslations((all) => ({ ...all, [currentPair]: { ...(all[currentPair] ?? {}), [key]: value } }));
+  }, [currentPair]);
 
   // ⌘/Ctrl + ↑/↓ moves between the rows currently shown, whatever the filter.
   const navigateFrom = useCallback((index: number, step: 1 | -1) => {
@@ -693,69 +795,74 @@ export default function SubtitleTool() {
     setFilter((current) => (current === "all" ? current : "all"));
   }, []);
 
-  function download(bilingual = true) {
+  function download(content: Content) {
     if (!tidy.length) return;
-    if (bilingual && translatedCount !== tidy.length) {
+    if (content !== "source" && translatedCount !== tidy.length) {
       setStatus("error");
-      setMessage("还有字幕尚未翻译完成。");
+      setMessage(t.notFinished);
       return;
     }
 
-    let content: string;
+    let srt: string;
     try {
-      content = serializeSrt(tidy, translations, {
+      srt = serializeSrt(tidy, translations, {
         ...profile,
         order,
-        bilingual,
+        content,
         timeOffsetMs: timeOffsetSeconds * 1000,
       });
     } catch (error) {
       setStatus("error");
-      setMessage(error instanceof Error ? error.message : "导出失败。");
+      setMessage(errorText(error, messages, t.exportFailed));
       return;
     }
-    const blob = new Blob([content], { type: "text/plain;charset=utf-8" });
+    const blob = new Blob([srt], { type: "text/plain;charset=utf-8" });
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement("a");
     anchor.href = url;
-    anchor.download = exportFileName(sourceName, bilingual, profile.suffix);
+    anchor.download = exportFileName(sourceName, content, profile.suffix, sourceLanguage, targetLanguage);
     anchor.click();
     // Safari can cancel the download if the URL is revoked in the same task.
     setTimeout(() => URL.revokeObjectURL(url), 1_000);
-    setToast(`已生成${bilingual ? "中英双语" : "英文"} SRT（UTF-8 BOM · CRLF），开始下载`);
+    const kind = content === "bilingual" ? t.kindBilingual : content === "source" ? t.kindSource : t.kindTranslation;
+    setToast(format(t.downloaded, { kind }));
     setTimeout(() => setToast(""), 3_000);
-    if (bilingual && overlongCount) {
+    if (content !== "source" && overlongCount) {
       setStatus("done");
-      setMessage(`已导出；其中 ${overlongCount} 条偏长，建议播放时重点检查。`);
+      setMessage(format(t.exportedOverlong, { count: overlongCount }));
     }
   }
 
   const editing = status === "translating";
-  const editorHelpTitle = editor === "resolve" ? "导入达芬奇的方法" : editor === "premiere" ? "导入 PR 的方法" : "导入剪辑软件的方法";
+  const editorText = messages.editors[editor];
   const pendingCount = tidy.length - translatedCount;
+  const detectedName = getLanguage(sourceLanguage).name;
+  const languageOptions = LANGUAGES.map((language) => (
+    <option key={language.code} value={language.code} lang={language.code}>{language.name}</option>
+  ));
 
   return (
     <section id="studio" className={`studio ${sourceCues.length ? "has-file" : ""}`} aria-labelledby="studio-title">
       <header className="studio-head">
         <div>
-          <p className="eyebrow">工作台</p>
-          <h2 id="studio-title">开始制作双语字幕</h2>
-          <p className="mobile-tip">逐条校对建议在电脑上完成；手机端适合查看进度与少量修改。</p>
+          <p className="eyebrow">{t.eyebrow}</p>
+          <h2 id="studio-title">{t.title}</h2>
+          <p className="mobile-tip">{t.mobileTip}</p>
         </div>
-        <dl className="telemetry" aria-label="当前任务概况">
-          <div><dt>原字幕</dt><dd>{sourceCues.length || "—"}</dd></div>
-          <div><dt>条目</dt><dd>{tidy.length || "—"}</dd></div>
-          <div><dt>时长</dt><dd>{sourceCues.length ? formatDuration(subtitleDuration(sourceCues)) : "—"}</dd></div>
-          <div className="telemetry-progress"><dt>完成</dt><dd>{sourceCues.length ? `${progress}%` : "—"}</dd></div>
+        <dl className="telemetry" aria-label={t.overview}>
+          <div><dt>{t.statSource}</dt><dd>{sourceCues.length || "—"}</dd></div>
+          <div><dt>{t.statCues}</dt><dd>{tidy.length || "—"}</dd></div>
+          <div><dt>{t.statDuration}</dt><dd>{sourceCues.length ? formatDuration(subtitleDuration(sourceCues)) : "—"}</dd></div>
+          <div className="telemetry-progress"><dt>{t.statDone}</dt><dd>{sourceCues.length ? `${progress}%` : "—"}</dd></div>
         </dl>
-        <span className={`signal-status ${progressStatus}`}><i aria-hidden="true" />{sourceCues.length ? progressLabel : "等待输入"}</span>
+        <span className={`signal-status ${progressStatus}`}><i aria-hidden="true" />{sourceCues.length ? progressLabel : t.waiting}</span>
       </header>
 
       <div className="lab-grid">
-        <aside className="rack" aria-label="字幕制作设置">
+        <aside className="rack" aria-label={t.settings}>
           <div className="rack-modules">
             <section className="module">
-              <h2><span className="module-index">01</span>导入字幕</h2>
+              <h2><span className="module-index">01</span>{t.importTitle}</h2>
               <div
                 className={`drop-zone ${dragging ? "dragging" : ""} ${sourceCues.length ? "has-file" : ""}`}
                 onDragEnter={(event) => { event.preventDefault(); setDragging(true); }}
@@ -773,86 +880,110 @@ export default function SubtitleTool() {
                   accept=".srt,application/x-subrip,text/plain"
                   disabled={editing}
                   onChange={(event) => void loadFile(event.target.files?.[0])}
-                  aria-label="选择 SRT 文件"
+                  aria-label={t.chooseFile}
                 />
                 {sourceCues.length ? (
                   <>
-                    <strong title={sourceName}>{sourceName}</strong>
+                    <strong title={sourceName} dir="auto">{sourceName}</strong>
                     <div className="file-meta">
-                      <span>{sourceCues.length} 条 · {formatDuration(subtitleDuration(sourceCues))}</span>
-                      <button className="ghost-button" type="button" disabled={editing} onClick={() => fileInputRef.current?.click()}>更换</button>
+                      <span>{format(t.fileMeta, { count: sourceCues.length, duration: formatDuration(subtitleDuration(sourceCues)) })}</span>
+                      <button className="ghost-button" type="button" disabled={editing} onClick={() => fileInputRef.current?.click()}>{t.replace}</button>
                     </div>
                   </>
                 ) : (
                   <>
-                    <button className="outline-button" type="button" onClick={() => fileInputRef.current?.click()}>选择 SRT 文件</button>
-                    <span>或拖到这里 · 最大 4 MB</span>
+                    <button className="outline-button" type="button" onClick={() => fileInputRef.current?.click()}>{t.chooseFile}</button>
+                    <span>{t.dropHint}</span>
                   </>
                 )}
               </div>
               {!sourceCues.length && lastSession && (
                 <div className="resume-card">
-                  <span>上次的任务 · {formatSavedAt(lastSession.savedAt)}</span>
-                  <strong title={lastSession.name}>{lastSession.name}</strong>
+                  <span>{format(t.lastTask, { time: formatSavedAt(lastSession.savedAt, locale) })}</span>
+                  <strong title={lastSession.name} dir="auto">{lastSession.name}</strong>
                   <div className="file-meta">
-                    <span>{lastSession.hasSource ? `已翻译 ${lastSession.translated} 条` : `已翻译 ${lastSession.translated} 条 · 重新选择该文件即可继续`}</span>
+                    <span>{format(lastSession.hasSource ? t.translatedCount : t.reselect, { count: lastSession.translated })}</span>
                     <span>
-                      {lastSession.hasSource && <button className="ghost-button accent" type="button" onClick={resumeLastSession}>继续</button>}
-                      <button className="ghost-button" type="button" onClick={forgetLastSession}>删除</button>
+                      {lastSession.hasSource && <button className="ghost-button accent" type="button" onClick={resumeLastSession}>{t.resume}</button>}
+                      <button className="ghost-button" type="button" onClick={forgetLastSession}>{t.remove}</button>
                     </span>
                   </div>
                 </div>
               )}
-              {!sourceCues.length && <button className="ghost-button demo-button" type="button" onClick={() => void loadText(SAMPLE_SRT, "演示字幕.srt", false)}>观看演示</button>}
+              {!sourceCues.length && <button className="ghost-button demo-button" type="button" onClick={() => void loadText(SAMPLE_SRT, t.demoFile, false)}>{t.watchDemo}</button>}
             </section>
 
             <section className="module">
-              <h2><span className="module-index">02</span>断句与排版</h2>
+              <h2><span className="module-index">02</span>{t.languagesTitle}</h2>
+              <fieldset disabled={editing}>
+                <div className="language-pair">
+                  <label className="field" htmlFor="source-language">
+                    <span className="field-label">{t.sourceLanguage}</span>
+                    <select id="source-language" value={sourceLanguage} onChange={(event) => { chooseSource(event.target.value); setDetectedLanguage(""); settingsChanged(); }}>
+                      {languageOptions}
+                    </select>
+                  </label>
+                  <span className="pair-arrow" aria-hidden="true">→</span>
+                  <label className="field" htmlFor="target-language">
+                    <span className="field-label">{t.targetLanguage}</span>
+                    <select id="target-language" value={targetLanguage} onChange={(event) => { setTargetLanguage(event.target.value); settingsChanged(); }}>
+                      {languageOptions}
+                    </select>
+                  </label>
+                </div>
+                {sameLanguage
+                  ? <p className="status-message error" role="alert">{t.sameLanguage}</p>
+                  : detectedLanguage && <span className="field-hint">{format(t.detected, { language: detectedName })}</span>}
+              </fieldset>
+            </section>
+
+            <section className="module">
+              <h2><span className="module-index">03</span>{t.layoutTitle}</h2>
               <fieldset disabled={editing}>
                 <div className="field">
-                  <span className="field-label" id="editor-label">导入平台</span>
+                  <span className="field-label" id="editor-label">{t.editor}</span>
                   <div className="segmented three" role="radiogroup" aria-labelledby="editor-label">
-                    {Object.keys(EDITOR_PROFILES).map((value) => (
-                      <label key={value}><input type="radio" name="editor" value={value} checked={editor === value} onChange={() => setEditor(value)} /><span>{EDITOR_SHORT_LABELS[value] ?? value}</span></label>
+                    {(Object.keys(EDITOR_PROFILES) as Editor[]).map((value) => (
+                      <label key={value}><input type="radio" name="editor" value={value} checked={editor === value} onChange={() => setEditor(value)} /><span>{messages.editors[value].short}</span></label>
                     ))}
                   </div>
                 </div>
                 <div className="field">
-                  <span className="field-label" id="frame-label">画幅</span>
+                  <span className="field-label" id="frame-label">{t.frame}</span>
                   <div className="segmented" role="radiogroup" aria-labelledby="frame-label">
-                    <label><input type="radio" name="frame" value="landscape" checked={frame === "landscape"} onChange={() => { setFrame("landscape"); settingsChanged(); }} /><span>横屏 16:9</span></label>
-                    <label><input type="radio" name="frame" value="portrait" checked={frame === "portrait"} onChange={() => { setFrame("portrait"); settingsChanged(); }} /><span>竖屏 9:16</span></label>
+                    <label><input type="radio" name="frame" value="landscape" checked={frame === "landscape"} onChange={() => { setFrame("landscape"); settingsChanged(); }} /><span>{t.landscape}</span></label>
+                    <label><input type="radio" name="frame" value="portrait" checked={frame === "portrait"} onChange={() => { setFrame("portrait"); settingsChanged(); }} /><span>{t.portrait}</span></label>
                   </div>
                 </div>
                 <div className="field">
-                  <span className="field-label" id="order-label">双语顺序</span>
+                  <span className="field-label" id="order-label">{t.order}</span>
                   <div className="segmented" role="radiogroup" aria-labelledby="order-label">
-                    <label><input type="radio" name="order" value="chinese-first" checked={order === "chinese-first"} onChange={() => setOrder("chinese-first")} /><span>中文在上</span></label>
-                    <label><input type="radio" name="order" value="english-first" checked={order === "english-first"} onChange={() => setOrder("english-first")} /><span>英文在上</span></label>
+                    <label><input type="radio" name="order" value="translation-first" checked={order === "translation-first"} onChange={() => setOrder("translation-first")} /><span>{t.translationFirst}</span></label>
+                    <label><input type="radio" name="order" value="source-first" checked={order === "source-first"} onChange={() => setOrder("source-first")} /><span>{t.sourceFirst}</span></label>
                   </div>
                 </div>
-                <p className="rule-note">只拆分，不合并 · 句末另起一条 · 短句单行</p>
+                <p className="rule-note">{t.ruleNote}</p>
 
                 <details className="advanced-settings">
-                  <summary>高级参数</summary>
+                  <summary>{t.advanced}</summary>
                   <div className="details-content">
                     <label className="field-label slider-label" htmlFor="max-chars">
-                      每条英文长度 <output htmlFor="max-chars">{maxChars}</output>
+                      {t.maxChars} <output htmlFor="max-chars">{sourceMaxChars}</output>
                     </label>
                     <input id="max-chars" className="range" type="range" min="48" max="84" step="6" value={maxChars} onChange={(event) => { setMaxChars(Number(event.target.value)); settingsChanged(); }} />
-                    <span className="field-hint">每行英文约 {profile.englishLineChars} 字符，中文约 {profile.chineseLineChars} 字</span>
+                    <span className="field-hint">{format(t.widthHint, { source: profile.sourceLineChars, target: profile.targetLineChars })}</span>
                     <div className="field">
-                      <span className="field-label" id="mode-label">超长句</span>
+                      <span className="field-label" id="mode-label">{t.longSentences}</span>
                       <div className="segmented" role="radiogroup" aria-labelledby="mode-label">
-                        <label><input type="radio" name="mode" value="new-cue" checked={mode === "new-cue"} onChange={() => { setMode("new-cue"); settingsChanged(); }} /><span>拆成新条目</span></label>
-                        <label><input type="radio" name="mode" value="line-break" checked={mode === "line-break"} onChange={() => { setMode("line-break"); settingsChanged(); }} /><span>仅换行</span></label>
+                        <label><input type="radio" name="mode" value="new-cue" checked={mode === "new-cue"} onChange={() => { setMode("new-cue"); settingsChanged(); }} /><span>{t.newCue}</span></label>
+                        <label><input type="radio" name="mode" value="line-break" checked={mode === "line-break"} onChange={() => { setMode("line-break"); settingsChanged(); }} /><span>{t.lineBreak}</span></label>
                       </div>
                     </div>
                     <label className="field" htmlFor="time-offset">
-                      <span className="field-label">导出整体时间偏移（秒）</span>
+                      <span className="field-label">{t.offset}</span>
                       <input id="time-offset" type="number" step="0.001" min="-36000" max="36000" value={timeOffsetSeconds} onChange={(event) => setTimeOffsetSeconds(Number(event.target.value) || 0)} />
                     </label>
-                    <span className="field-hint">默认 0，仅在视频时间线需要偏移时调整。</span>
+                    <span className="field-hint">{t.offsetHint}</span>
                   </div>
                 </details>
               </fieldset>
@@ -860,45 +991,58 @@ export default function SubtitleTool() {
             </section>
 
             <section className="module">
-              <h2><span className="module-index">03</span>翻译引擎<a href="https://platform.deepseek.com/api_keys" target="_blank" rel="noreferrer">获取 Key ↗</a></h2>
+              <h2><span className="module-index">04</span>{t.engineTitle}<a href={providerConfig.keyUrl} target="_blank" rel="noreferrer">{t.getKey}</a></h2>
               <fieldset disabled={editing}>
+                <label className="field" htmlFor="provider">
+                  <span className="field-label">{t.provider}</span>
+                  <select id="provider" value={provider} onChange={(event) => { setProvider(event.target.value); setKeyAttention(false); }}>
+                    {PROVIDER_IDS.map((id) => <option key={id} value={id}>{PROVIDER_CONFIG[id].label}</option>)}
+                  </select>
+                </label>
                 <label className="field" htmlFor="api-key">
-                  <span className="field-label">DeepSeek API Key</span>
-                  <input ref={keyInputRef} id="api-key" className={keyAttention ? "attention" : ""} type="password" autoComplete="off" spellCheck="false" value={apiKey} placeholder="sk-…" onChange={(event) => { setApiKey(event.target.value); setKeyAttention(false); }} />
+                  <span className="field-label">{format(t.apiKey, { provider: providerConfig.label })}</span>
+                  <input ref={keyInputRef} id="api-key" className={keyAttention ? "attention" : ""} type="password" autoComplete="off" spellCheck="false" dir="ltr" value={apiKey} placeholder={providerConfig.keyHint} onChange={(event) => { setApiKeys((keys) => ({ ...keys, [provider]: event.target.value })); setKeyAttention(false); }} />
                 </label>
                 <div className="key-options">
                   <label className="checkbox-field">
                     <input type="checkbox" checked={rememberKey} onChange={(event) => setRememberKey(event.target.checked)} />
-                    在本机浏览器记住 Key
+                    {t.rememberKey}
                   </label>
-                  {apiKey && <button className="ghost-button" type="button" onClick={() => { setApiKey(""); setRememberKey(false); }}>清除 Key</button>}
+                  {apiKey && <button className="ghost-button" type="button" onClick={() => { setApiKeys((keys) => ({ ...keys, [provider]: "" })); setRememberKey(false); }}>{t.clearKey}</button>}
                 </div>
                 <p className="key-note">
                   <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4.5 7V5a3.5 3.5 0 0 1 7 0v2" fill="none" stroke="currentColor" strokeWidth="1.5" /><rect x="3" y="7" width="10" height="7.5" rx="2" fill="currentColor" /></svg>
-                  API Key 默认不保存；勾选后仅存于本机浏览器。翻译时经本站转发至 DeepSeek，本站不做保存。
+                  {format(t.keyNote, { provider: providerConfig.label })}
                 </p>
-                <div className="field">
-                  <span className="field-label" id="model-label">模型</span>
-                  <div className="segmented" role="radiogroup" aria-labelledby="model-label">
-                    <label><input type="radio" name="model" value="deepseek-v4-flash" checked={model === "deepseek-v4-flash"} onChange={() => setModel("deepseek-v4-flash")} /><span>V4 Flash · 快速</span></label>
-                    <label><input type="radio" name="model" value="deepseek-v4-pro" checked={model === "deepseek-v4-pro"} onChange={() => setModel("deepseek-v4-pro")} /><span>V4 Pro · 质量</span></label>
-                  </div>
-                </div>
-                <label className="field" htmlFor="glossary">
-                  <span className="field-label">人名与术语（可选）</span>
-                  <textarea id="glossary" rows={3} spellCheck="false" value={glossaryText} placeholder={"每行一条，例如：\nZane = 赞恩\nKubernetes = Kubernetes"} onChange={(event) => setGlossaryText(event.target.value)} />
+                <label className="field" htmlFor="model">
+                  <span className="field-label">{t.model}</span>
+                  {providerConfig.strictModels ? (
+                    <select id="model" value={model} onChange={(event) => setModels((current) => ({ ...current, [provider]: event.target.value }))}>
+                      {providerConfig.models.map((name) => <option key={name} value={name}>{name}</option>)}
+                    </select>
+                  ) : (
+                    <input id="model" list="model-options" dir="ltr" spellCheck="false" autoComplete="off" value={models[provider] ?? model} onChange={(event) => setModels((current) => ({ ...current, [provider]: event.target.value }))} />
+                  )}
+                  <datalist id="model-options">
+                    {providerConfig.models.map((name) => <option key={name} value={name} />)}
+                  </datalist>
                 </label>
-                <span className="field-hint">整部字幕统一使用这些译名；修改后只影响之后翻译的条目。</span>
+                {!providerConfig.strictModels && <span className="field-hint">{t.modelHint}</span>}
+                <label className="field" htmlFor="glossary">
+                  <span className="field-label">{t.glossary}</span>
+                  <textarea id="glossary" rows={3} spellCheck="false" value={glossaryText} placeholder={t.glossaryPlaceholder} onChange={(event) => setGlossaryText(event.target.value)} />
+                </label>
+                <span className="field-hint">{t.glossaryHint}</span>
               </fieldset>
             </section>
 
             <details className="module platform-help">
-              <summary>{editorHelpTitle}</summary>
+              <summary>{editorText.helpTitle}</summary>
               <div className="details-content">
-                <p>{profile.importHelp}</p>
-                <p>{profile.styleHelp}</p>
-                <p>字体、字号和位置在剪辑软件内设置。</p>
-                <a href={profile.sourceUrl} target="_blank" rel="noreferrer">导入说明 ↗</a>{"  "}<a href={profile.styleSourceUrl} target="_blank" rel="noreferrer">样式说明 ↗</a>
+                <p>{editorText.importHelp}</p>
+                <p>{editorText.styleHelp}</p>
+                <p>{t.fontNote}</p>
+                <a href={profile.sourceUrl} target="_blank" rel="noreferrer">{t.importDocs}</a>{"  "}<a href={profile.styleSourceUrl} target="_blank" rel="noreferrer">{t.styleDocs}</a>
               </div>
             </details>
           </div>
@@ -907,24 +1051,24 @@ export default function SubtitleTool() {
             <div className="dock-readout">
               <strong className="dock-figure">{sourceCues.length ? progress : 0}<small>%</small></strong>
               <div>
-                <span className="dock-label">{sourceCues.length ? progressLabel : "等待输入"}</span>
-                <span className="dock-count">已完成 {translatedCount}/{tidy.length}</span>
+                <span className="dock-label">{sourceCues.length ? progressLabel : t.waiting}</span>
+                <span className="dock-count">{format(t.doneCount, { done: translatedCount, total: tidy.length })}</span>
               </div>
             </div>
-            <div className="meter" role="progressbar" aria-label="双语字幕制作进度" aria-valuemin={0} aria-valuemax={100} aria-valuenow={progress}>
+            <div className="meter" role="progressbar" aria-label={t.progress} aria-valuemin={0} aria-valuemax={100} aria-valuenow={progress}>
               <i style={{ width: `${progress}%` }} />
             </div>
             {(status !== "done" || translatedCount !== tidy.length) && <div className="task-actions">
               {editing ? (
-                <button className="outline-button" type="button" onClick={() => abortRef.current?.abort()}>暂停任务</button>
+                <button className="outline-button" type="button" onClick={() => abortRef.current?.abort()}>{t.pause}</button>
               ) : (
                 <>
-                  <button className="primary-button" type="button" disabled={!tidy.length || translatedCount === tidy.length} onClick={() => void translate()}>
+                  <button className="primary-button" type="button" disabled={!tidy.length || translatedCount === tidy.length || sameLanguage} onClick={() => void translate()}>
                     {translatedCount > 0 && translatedCount < tidy.length
-                      ? `继续任务 · ${tidy.length - translatedCount} 条`
-                      : status === "error" ? "继续任务" : translatedCount && translatedCount === tidy.length ? "翻译完成" : "开始翻译"}
+                      ? format(t.continueCount, { count: tidy.length - translatedCount })
+                      : status === "error" ? t.continue : translatedCount && translatedCount === tidy.length ? t.finished : t.start}
                   </button>
-                  {status === "error" && sourceCues.length > 0 && <button className="outline-button" type="button" onClick={() => void translate(true)}>重新开始</button>}
+                  {status === "error" && sourceCues.length > 0 && <button className="outline-button" type="button" onClick={() => void translate(true)}>{t.restart}</button>}
                 </>
               )}
             </div>}
@@ -932,47 +1076,48 @@ export default function SubtitleTool() {
           </div>
         </aside>
 
-        <section className="bench" aria-label="字幕预览与下载">
+        <section className="bench" aria-label={t.bench}>
           <div className="bench-bar">
             <div className="bench-title">
-              <h2>字幕预览</h2>
-              <p>{sourceCues.length ? `${sourceCues.length} 条原字幕 → ${tidy.length} 条` : "导入后可校对、翻译和下载"}{qualityWarningCount > 0 && ` · ${qualityWarningCount} 条需检查`}</p>
+              <h2>{t.previewTitle}</h2>
+              <p>{sourceCues.length ? format(t.summary, { source: sourceCues.length, cues: tidy.length }) : t.previewEmpty}{qualityWarningCount > 0 && format(t.needCheck, { count: qualityWarningCount })}</p>
             </div>
             {tidy.length > 0 && (
-              <div className="filters" role="radiogroup" aria-label="筛选字幕">
-                {([["all", "全部", tidy.length], ["pending", "未翻译", pendingCount], ["warn", "需检查", qualityWarningCount]] as const).map(([value, label, count]) => (
+              <div className="filters" role="radiogroup" aria-label={t.filters}>
+                {([["all", t.filterAll, tidy.length], ["pending", t.filterPending, pendingCount], ["warn", t.filterWarn, qualityWarningCount]] as const).map(([value, label, count]) => (
                   <label key={value} className={value}><input type="radio" name="filter" value={value} checked={filter === value} onChange={() => setFilter(value)} /><span>{label}<b>{count}</b></span></label>
                 ))}
               </div>
             )}
             <div className="bench-actions">
-              <button className="outline-button" type="button" disabled={!tidy.length} onClick={() => download(false)}>下载英文</button>
-              <button className="primary-button" type="button" disabled={!tidy.length || translatedCount !== tidy.length} onClick={() => download(true)}>下载双语 SRT</button>
+              <button className="outline-button" type="button" disabled={!tidy.length} onClick={() => download("source")}>{t.downloadSource}</button>
+              <button className="outline-button" type="button" disabled={!tidy.length || translatedCount !== tidy.length} onClick={() => download("translation")}>{t.downloadTranslation}</button>
+              <button className="primary-button" type="button" disabled={!tidy.length || translatedCount !== tidy.length} onClick={() => download("bilingual")}>{t.downloadBilingual}</button>
             </div>
           </div>
 
           {previewCue ? (
             <div className="bench-body" ref={benchBodyRef}>
               <div className="instrument">
-                <SignalTrack cues={tidy} stateCodes={stateCodes} activeIndex={activePreviewIndex} onSelect={selectFromTrack} />
+                <SignalTrack cues={tidy} stateCodes={stateCodes} activeIndex={activePreviewIndex} label={t.track} onSelect={selectFromTrack} />
                 <div className="legend" aria-hidden="true">
-                  <span className="done">已翻译</span><span className="pending">待翻译</span><span className="warn">需检查</span>
-                  <span className="shortcut"><kbd>⌘/Ctrl</kbd>+<kbd>↑↓</kbd> 切换条目</span>
+                  <span className="done">{t.legendDone}</span><span className="pending">{t.legendPending}</span><span className="warn">{t.legendWarn}</span>
+                  <span className="shortcut"><kbd>⌘/Ctrl</kbd>+<kbd>↑↓</kbd> {t.shortcut}</span>
                 </div>
                 <details className="monitor">
-                  <summary>画面预览<span>第 {activePreviewIndex + 1} 条 · {formatTimestamp(previewCue.startMs + timeOffsetSeconds * 1000)}</span></summary>
+                  <summary>{t.monitor}<span>{format(t.monitorPosition, { index: activePreviewIndex + 1, time: formatTimestamp(previewCue.startMs + timeOffsetSeconds * 1000) })}</span></summary>
                   <div className={`preview-screen ${frame}`}>
                     <div className={`screen-subtitles ${order}`}>
-                      {translations[previewCue.id]?.trim() && <p className="screen-chinese">{wrapChineseSubtitle(translations[previewCue.id], profile.chineseLineChars)}</p>}
-                      <p className="screen-english">{previewCue.text}</p>
+                      {translations[previewCue.id]?.trim() && <p className="screen-chinese" lang={targetLanguage} dir={dirOf(targetLanguage)}>{wrapSubtitle(translations[previewCue.id], profile.targetLineChars, targetLanguage)}</p>}
+                      <p className="screen-english" lang={sourceLanguage} dir={dirOf(sourceLanguage)}>{previewCue.text}</p>
                     </div>
                   </div>
                   <div className="preview-navigation">
-                    <button className="ghost-button" type="button" disabled={activePreviewIndex === 0} onClick={() => setPreviewIndex(activePreviewIndex - 1)}>← 上一条</button>
+                    <button className="ghost-button" type="button" disabled={activePreviewIndex === 0} onClick={() => setPreviewIndex(activePreviewIndex - 1)}>{t.previous}</button>
                     <span>{activePreviewIndex + 1} / {tidy.length}</span>
-                    <button className="ghost-button" type="button" disabled={activePreviewIndex === tidy.length - 1} onClick={() => setPreviewIndex(activePreviewIndex + 1)}>下一条 →</button>
+                    <button className="ghost-button" type="button" disabled={activePreviewIndex === tidy.length - 1} onClick={() => setPreviewIndex(activePreviewIndex + 1)}>{t.next}</button>
                   </div>
-                  <p className="field-hint preview-hint">排版模拟，最终显示以剪辑软件内的样式为准。</p>
+                  <p className="field-hint preview-hint">{t.previewHint}</p>
                 </details>
               </div>
               <div className="cue-list">
@@ -986,24 +1131,27 @@ export default function SubtitleTool() {
                     active={activePreviewIndex === index}
                     order={order}
                     timeOffsetMs={timeOffsetSeconds * 1000}
-                    chineseLineChars={profile.chineseLineChars}
-                    placeholder={status === "done" ? "编辑译文" : "中文译文"}
+                    targetLineChars={profile.targetLineChars}
+                    sourceLanguage={sourceLanguage}
+                    targetLanguage={targetLanguage}
+                    placeholder={status === "done" ? t.placeholderEdit : t.placeholder}
+                    t={t}
                     onEdit={updateTranslation}
                     onSelect={setPreviewIndex}
                     onNavigate={navigateFrom}
                   />
                 ))}
-                {!rows.length && <p className="list-empty">{filter === "pending" ? "没有未翻译的条目" : "没有需要检查的条目"}</p>}
+                {!rows.length && <p className="list-empty">{filter === "pending" ? t.noPending : t.noWarn}</p>}
               </div>
             </div>
           ) : (
             <div className="empty-bench">
               <LogoMark className="hero-mark" />
-              <p>将英文字幕拖放到此处</p>
-              <span>支持 Buzz 导出的 SRT 文件；也可以先观看演示效果。</span>
+              <p>{t.dropTitle}</p>
+              <span>{t.dropBody}</span>
               <div className="hero-actions">
-                <button className="primary-button" type="button" disabled={editing} onClick={() => fileInputRef.current?.click()}>选择 SRT 文件</button>
-                <button className="ghost-button" type="button" data-demo onClick={() => void loadText(SAMPLE_SRT, "演示字幕.srt", false)}>观看演示（无需 API Key）›</button>
+                <button className="primary-button" type="button" disabled={editing} onClick={() => fileInputRef.current?.click()}>{t.chooseFile}</button>
+                <button className="ghost-button" type="button" data-demo onClick={() => void loadText(SAMPLE_SRT, t.demoFile, false)}>{t.demoButton}</button>
               </div>
             </div>
           )}
